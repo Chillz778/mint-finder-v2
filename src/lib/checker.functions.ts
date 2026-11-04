@@ -6,7 +6,7 @@ import type { Database } from "@/integrations/supabase/types";
 import {
   CHAIN_OPTIONS,
   collectionIdentityKey,
-  dedupeProjectResults,
+  dedupeCollections,
   detectWalletKind,
   isMintingOrUpcoming,
   normalizeWallet,
@@ -172,7 +172,7 @@ async function loadDrops(chains: string[]): Promise<ResultItem[]> {
     handles.push(...batch);
   }
   const checkedAt = new Date().toISOString();
-  return dedupeProjectResults(
+  return dedupeCollections(
     drops.map((d, i) => {
       const stage = d.is_minting ? d.active_stage : d.next_stage;
       const handle = handles[i];
@@ -305,7 +305,7 @@ export const checkWallet = createServerFn({ method: "POST" })
           ? "OpenSea listings are not configured yet. Admin-curated projects can still be checked."
           : "OpenSea listings are temporarily unavailable. Admin-curated projects were still checked.";
     }
-    const uniqueManual = dedupeProjectResults(manual);
+    const uniqueManual = dedupeCollections(manual);
     const manualSlugs = new Set(
       uniqueManual
         .filter((item) => item.opensea_slug)
@@ -314,7 +314,7 @@ export const checkWallet = createServerFn({ method: "POST" })
     return {
       error: null,
       kind,
-      items: dedupeProjectResults([
+      items: dedupeCollections([
         ...uniqueManual,
         ...drops.filter(
           (drop) => !manualSlugs.has(collectionIdentityKey(drop.chain, drop.opensea_slug ?? "")),
