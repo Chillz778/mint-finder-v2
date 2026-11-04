@@ -11,6 +11,7 @@ import {
   isMintingOrUpcoming,
   normalizeWallet,
   parseXHandle,
+  splitOpenSeaEligibleStages,
   type ResultItem,
 } from "./chains";
 
@@ -403,7 +404,10 @@ export const openseaEligibility = createServerFn({ method: "POST" })
 
     let response: {
       error: string | null;
-      results: Record<string, { eligible: boolean; stages: string[] } | null>;
+      results: Record<
+        string,
+        { whitelistStages: string[]; publicStages: string[]; unknownStages: string[] } | null
+      >;
     };
     try {
       const subjectToken = firstString(patJson, ["token", "value", "accessToken", "pat", "secret"]);
@@ -420,20 +424,26 @@ export const openseaEligibility = createServerFn({ method: "POST" })
         const accessToken = stringField(asObject(await ex.json()) ?? {}, "accessToken");
         if (!accessToken) throw new Error("OpenSea did not return an eligibility token");
 
-        const results: Record<string, { eligible: boolean; stages: string[] } | null> = {};
+        const results: Record<
+          string,
+          { whitelistStages: string[]; publicStages: string[]; unknownStages: string[] } | null
+        > = {};
         await Promise.all(
           data.slugs.map(async (slug) => {
             const result = await osGet(`/api/v2/drops/${encodeURIComponent(slug)}/eligibility`, {
               Authorization: `Bearer ${accessToken}`,
             });
             if (!result) return void (results[slug] = null);
-            const stages = asObjects(result["stages"]);
-            const eligibleStages = stages.filter((stage) => stage["is_eligible"] === true);
+            const stages = asObjects(result["stages"]).map((stage) => ({
+              stage_type: stringField(stage, "stage_type"),
+              label: firstString(stage, ["label", "stage_type"]) ?? "Stage",
+              is_eligible: stage["is_eligible"] === true,
+            }));
+            const split = splitOpenSeaEligibleStages(stages);
             results[slug] = {
-              eligible: eligibleStages.length > 0,
-              stages: eligibleStages.map(
-                (stage) => firstString(stage, ["label", "stage_type"]) ?? "Stage",
-              ),
+              whitelistStages: split.whitelistStages.map((stage) => stage.label),
+              publicStages: split.publicStages.map((stage) => stage.label),
+              unknownStages: split.unknownStages.map((stage) => stage.label),
             };
           }),
         );

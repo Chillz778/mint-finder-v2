@@ -77,6 +77,25 @@ export function parseXHandle(input: string): string | null {
 export type Status = "eligible" | "not_eligible" | "sign_in" | "check_site" | "unknown";
 export type EligibilityType = "public" | "whitelist" | "holder" | "site";
 
+export type OpenSeaEligibilityStage = {
+  stage_type: string | null;
+  label: string;
+  is_eligible: boolean;
+};
+
+export function splitOpenSeaEligibleStages(stages: OpenSeaEligibilityStage[]) {
+  const eligibleStages = stages.filter((stage) => stage.is_eligible);
+  return {
+    publicStages: eligibleStages.filter(
+      (stage) => stage.stage_type?.toLowerCase() === "public_sale",
+    ),
+    whitelistStages: eligibleStages.filter(
+      (stage) => stage.stage_type != null && stage.stage_type.toLowerCase() !== "public_sale",
+    ),
+    unknownStages: eligibleStages.filter((stage) => !stage.stage_type),
+  };
+}
+
 export type ResultItem = {
   key: string;
   name: string;
@@ -88,6 +107,8 @@ export type ResultItem = {
   checked_at: string;
   status: Status;
   eligibility_type: EligibilityType;
+  eligibility_verified?: boolean;
+  verified_stages?: string[];
   detail: string;
   mint_url: string | null;
   start_time: string | null;

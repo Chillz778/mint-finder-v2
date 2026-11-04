@@ -34,6 +34,7 @@ function statusLabel(item: ResultItem) {
   switch (item.status) {
     case "eligible":
       if (item.eligibility_type === "public") {
+        if (item.eligibility_verified) return "Eligible for public phase";
         return item.source === "opensea" ? "Public stage listed" : "Owner-listed public mint";
       }
       return "Eligible";
@@ -50,9 +51,7 @@ function statusLabel(item: ResultItem) {
 
 function sourceLabel(item: ResultItem) {
   if (item.source === "opensea") {
-    return item.eligibility_type === "whitelist" && item.status !== "sign_in"
-      ? "OpenSea eligibility check"
-      : "OpenSea drop listing";
+    return item.eligibility_verified ? "OpenSea eligibility check" : "OpenSea drop listing";
   }
   if (item.eligibility_type === "whitelist") {
     return item.status === "sign_in" ? "Owner-managed OpenSea gate" : "Owner-managed allowlist";
@@ -109,6 +108,7 @@ function whitelistStatusLabel(item: ResultItem) {
 function Index() {
   const navigate = useNavigate();
   const [wallet, setWallet] = useState("");
+  const [connectedWallet, setConnectedWallet] = useState("");
   const [walletMessage, setWalletMessage] = useState("");
   const [walletError, setWalletError] = useState("");
   const [isChecking, setIsChecking] = useState(false);
@@ -166,6 +166,7 @@ function Index() {
     try {
       const accounts = await provider.request({ method: "eth_requestAccounts" });
       const account = Array.isArray(accounts) && typeof accounts[0] === "string" ? accounts[0] : "";
+      if (account) setConnectedWallet(account);
       if (!account || account.toLowerCase() !== wallet.trim().toLowerCase()) {
         setEligibilityMessages((current) => ({
           ...current,
@@ -199,18 +200,46 @@ function Index() {
         }));
         return;
       }
+      const hasWhitelistEligibility = result.whitelistStages.length > 0;
+      const hasPublicEligibility = result.publicStages.length > 0;
+      const hasUnknownPhase = result.unknownStages.length > 0;
+      const eligibilityType = hasWhitelistEligibility
+        ? "whitelist"
+        : hasPublicEligibility
+          ? "public"
+          : hasUnknownPhase
+            ? "site"
+            : "whitelist";
+      const status =
+        hasWhitelistEligibility || hasPublicEligibility
+          ? "eligible"
+          : hasUnknownPhase
+            ? "unknown"
+            : "not_eligible";
+      const detail = hasWhitelistEligibility
+        ? `OpenSea confirms whitelist eligibility for ${result.whitelistStages.join(", ")}.${hasPublicEligibility ? ` Also eligible for the public phase${result.publicStages.length ? ` (${result.publicStages.join(", ")})` : ""}.` : ""}`
+        : hasPublicEligibility
+          ? `OpenSea confirms eligibility for the public phase (${result.publicStages.join(", ")}) only. No whitelist eligibility was confirmed.`
+          : hasUnknownPhase
+            ? `OpenSea returned an eligible phase (${result.unknownStages.join(", ")}) without identifying its type. Check the phase directly on OpenSea; no whitelist status is claimed.`
+            : "OpenSea did not confirm eligibility for any phase. No whitelist status is claimed; check the project's official mint page for any public phase.";
+      const verifiedStages = [
+        ...result.whitelistStages,
+        ...result.publicStages,
+        ...result.unknownStages,
+      ];
       setResults(
         (current) =>
           current?.map((item) =>
             item.key === drop.key
               ? {
                   ...item,
-                  status: result.eligible ? "eligible" : "not_eligible",
-                  eligibility_type: "whitelist",
+                  status,
+                  eligibility_type: eligibilityType,
+                  eligibility_verified: true,
+                  verified_stages: verifiedStages,
                   checked_at: new Date().toISOString(),
-                  detail: result.eligible
-                    ? `Whitelisted for ${result.stages.join(", ") || "an OpenSea stage"}`
-                    : "OpenSea did not whitelist this wallet for an available stage",
+                  detail,
                 }
               : item,
           ) ?? null,
@@ -229,6 +258,35 @@ function Index() {
     } finally {
       setEligibilityBusy("");
     }
+  }
+
+  async function disconnectWallet() {
+    const provider = (
+      window as Window & {
+        ethereum?: { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> };
+      }
+    ).ethereum;
+    let permissionRevoked = false;
+    if (provider && connectedWallet) {
+      try {
+        await provider.request({
+          method: "wallet_revokePermissions",
+          params: [{ eth_accounts: {} }],
+        });
+        permissionRevoked = true;
+      } catch {
+        // The wallet may not expose a programmatic disconnect method.
+      }
+    }
+    setConnectedWallet("");
+    setWallet("");
+    setResults(null);
+    setEligibilityMessages({});
+    setWalletMessage(
+      permissionRevoked
+        ? "Wallet disconnected and its address was cleared from this page."
+        : "Wallet details and results were cleared from this page. If the wallet still lists this site as connected, disconnect it in the wallet's connected-sites settings.",
+    );
   }
 
   async function handleWalletSubmit(event: FormEvent<HTMLFormElement>) {
@@ -462,6 +520,23 @@ function Index() {
                 {!isChecking && <ArrowRight size={16} />}
               </button>
             </form>
+            {connectedWallet && (
+              <div className="wallet-connected" role="status">
+                <span>
+                  Connected {connectedWallet.slice(0, 6)}…{connectedWallet.slice(-4)}
+                </span>
+                <button type="button" onClick={() => void disconnectWallet()}>
+                  Disconnect wallet
+                </button>
+              </div>
+            )}
+            <p className="wallet-safety-note">
+              Connecting shares your public address with this site; it does not authorize a
+              transaction. OpenSea eligibility checks request a message signature, not a
+              transaction. Never share your recovery phrase or private key. A wallet warning is not
+              something to dismiss; verify the site and message, and cancel if anything is
+              unexpected.
+            </p>
             <div className="supported-chains">
               <span>NETWORKS</span>
               {CHAIN_OPTIONS.map((chain) => (
@@ -606,7 +681,16 @@ function Index() {
                           <span>Use the project’s official page to check eligibility.</span>
                         )}
                         <p>
-                          Message signature only; no transaction. The connected wallet must match.
+                          Message signature only; no blockchain transaction. The connected wallet
+                          must match. The message also says you accept OpenSea’s{" "}
+                          <a href="https://opensea.io/tos" target="_blank" rel="noreferrer">
+                            Terms
+                          </a>{" "}
+                          and{" "}
+                          <a href="https://opensea.io/privacy" target="_blank" rel="noreferrer">
+                            Privacy Policy
+                          </a>
+                          . Review the message before signing.
                         </p>
                         {eligibilityMessages[item.key] && (
                           <p className="eligibility-message" role="status">

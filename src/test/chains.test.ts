@@ -6,6 +6,7 @@ import {
   detectWalletKind,
   isMintingOrUpcoming,
   normalizeWallet,
+  splitOpenSeaEligibleStages,
 } from "@/lib/chains";
 
 describe("supported network wallet handling", () => {
@@ -82,5 +83,35 @@ describe("supported network wallet handling", () => {
     expect(isMintingOrUpcoming(false, "2026-11-05T12:00:00.000Z", now)).toBe(true);
     expect(isMintingOrUpcoming(false, "2026-11-03T12:00:00.000Z", now)).toBe(false);
     expect(isMintingOrUpcoming(false, null, now)).toBe(false);
+  });
+
+  it("does not treat public-phase eligibility as whitelist eligibility", () => {
+    const result = splitOpenSeaEligibleStages([
+      { stage_type: "public_sale", label: "Public Sale", is_eligible: true },
+      { stage_type: "allowlist", label: "Allowlist", is_eligible: false },
+    ]);
+
+    expect(result.publicStages.map((stage) => stage.label)).toEqual(["Public Sale"]);
+    expect(result.whitelistStages).toEqual([]);
+  });
+
+  it("reports eligible private phases separately from the public phase", () => {
+    const result = splitOpenSeaEligibleStages([
+      { stage_type: "public_sale", label: "Public Sale", is_eligible: true },
+      { stage_type: "allowlist", label: "Founders Allowlist", is_eligible: true },
+      { stage_type: "presale", label: "Presale", is_eligible: false },
+    ]);
+
+    expect(result.publicStages.map((stage) => stage.label)).toEqual(["Public Sale"]);
+    expect(result.whitelistStages.map((stage) => stage.label)).toEqual(["Founders Allowlist"]);
+  });
+
+  it("does not classify a phase without a type as whitelist eligibility", () => {
+    const result = splitOpenSeaEligibleStages([
+      { stage_type: null, label: "Unnamed phase", is_eligible: true },
+    ]);
+
+    expect(result.unknownStages.map((stage) => stage.label)).toEqual(["Unnamed phase"]);
+    expect(result.whitelistStages).toEqual([]);
   });
 });
