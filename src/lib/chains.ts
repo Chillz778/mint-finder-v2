@@ -47,6 +47,48 @@ export function normalizeWallet(address: string) {
   return detectWalletKind(a) === "evm" ? a.toLowerCase() : a;
 }
 
+export function collectionIdentityKey(chain: string, slug: string) {
+  return `${chain.trim().toLowerCase()}:${slug.trim().toLowerCase()}`;
+}
+
+export function dedupeProjectResults<
+  T extends {
+    key: string;
+    chain: string;
+    name: string;
+    x_handle: string | null;
+    opensea_slug: string | null;
+  },
+>(items: T[]) {
+  const seenSlugs = new Set<string>();
+  const seenProjectProfiles = new Set<string>();
+  return items.filter((item) => {
+    const slugIdentity = item.opensea_slug
+      ? collectionIdentityKey(item.chain, item.opensea_slug)
+      : null;
+    const profileHandle = item.x_handle?.trim().replace(/^@/, "").toLowerCase();
+    const profileName = item.name
+      .normalize("NFKC")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+    const profileIdentity =
+      profileHandle && profileName
+        ? `${item.chain.trim().toLowerCase()}:${profileName}:${profileHandle}`
+        : null;
+
+    if (
+      (slugIdentity && seenSlugs.has(slugIdentity)) ||
+      (profileIdentity && seenProjectProfiles.has(profileIdentity))
+    ) {
+      return false;
+    }
+    if (slugIdentity) seenSlugs.add(slugIdentity);
+    if (profileIdentity) seenProjectProfiles.add(profileIdentity);
+    return true;
+  });
+}
+
 export function parseXHandle(input: string): string | null {
   const s = input.trim();
   const m = s.match(/(?:x\.com|twitter\.com)\/(@?[A-Za-z0-9_]{1,15})/i);

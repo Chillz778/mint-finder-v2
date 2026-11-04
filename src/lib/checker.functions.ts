@@ -5,6 +5,8 @@ import { requireAdminSession } from "./admin-auth.server";
 import type { Database } from "@/integrations/supabase/types";
 import {
   CHAIN_OPTIONS,
+  collectionIdentityKey,
+  dedupeProjectResults,
   detectWalletKind,
   isMintingOrUpcoming,
   normalizeWallet,
@@ -145,7 +147,7 @@ async function loadDrops(chains: string[]): Promise<ResultItem[]> {
   for (const l of lists) {
     for (const rawDrop of asObjects(l?.["drops"])) {
       const drop = parseDrop(rawDrop);
-      const key = drop ? `${drop.chain}:${drop.collection_slug}` : "";
+      const key = drop ? collectionIdentityKey(drop.chain, drop.collection_slug) : "";
       if (drop && chains.includes(drop.chain) && !seen.has(key)) {
         seen.set(key, drop);
       }
@@ -170,36 +172,38 @@ async function loadDrops(chains: string[]): Promise<ResultItem[]> {
     handles.push(...batch);
   }
   const checkedAt = new Date().toISOString();
-  return drops.map((d, i) => {
-    const stage = d.is_minting ? d.active_stage : d.next_stage;
-    const handle = handles[i];
-    const isPublic = stage?.stage_type === "public_sale";
-    const status = isPublic ? "eligible" : stage ? "sign_in" : "check_site";
-    return {
-      key: `os:${d.collection_slug}`,
-      name: d.collection_name,
-      x_handle: handle?.x ?? null,
-      image: d.image_url ?? null,
-      chain: d.chain,
-      source: "opensea",
-      source_url: `https://opensea.io/collection/${encodeURIComponent(d.collection_slug)}`,
-      checked_at: checkedAt,
-      status,
-      eligibility_type: isPublic ? "public" : stage ? "whitelist" : "site",
-      detail:
-        status === "eligible"
-          ? `${stage?.label ?? "Public stage"} — OpenSea lists this as open to every wallet; it is not a wallet-specific eligibility check`
-          : status === "sign_in"
-            ? `${stage?.label ?? "Restricted stage"} — sign in with OpenSea to check eligibility`
-            : d.is_minting
-              ? "Minting is live — check the official page for details"
-              : "No active or upcoming stage listed — check the project site",
-      mint_url: d.opensea_url ?? handle?.site ?? null,
-      start_time: stage?.start_time ?? null,
-      price: weiToEth(stage?.price),
-      opensea_slug: d.collection_slug,
-    } satisfies ResultItem;
-  });
+  return dedupeProjectResults(
+    drops.map((d, i) => {
+      const stage = d.is_minting ? d.active_stage : d.next_stage;
+      const handle = handles[i];
+      const isPublic = stage?.stage_type === "public_sale";
+      const status = isPublic ? "eligible" : stage ? "sign_in" : "check_site";
+      return {
+        key: `os:${d.collection_slug}`,
+        name: d.collection_name,
+        x_handle: handle?.x ?? null,
+        image: d.image_url ?? null,
+        chain: d.chain,
+        source: "opensea",
+        source_url: `https://opensea.io/collection/${encodeURIComponent(d.collection_slug)}`,
+        checked_at: checkedAt,
+        status,
+        eligibility_type: isPublic ? "public" : stage ? "whitelist" : "site",
+        detail:
+          status === "eligible"
+            ? `${stage?.label ?? "Public stage"} — OpenSea lists this as open to every wallet; it is not a wallet-specific eligibility check`
+            : status === "sign_in"
+              ? `${stage?.label ?? "Restricted stage"} — sign in with OpenSea to check eligibility`
+              : d.is_minting
+                ? "Minting is live — check the official page for details"
+                : "No active or upcoming stage listed — check the project site",
+        mint_url: d.opensea_url ?? handle?.site ?? null,
+        start_time: stage?.start_time ?? null,
+        price: weiToEth(stage?.price),
+        opensea_slug: d.collection_slug,
+      } satisfies ResultItem;
+    }),
+  );
 }
 
 export const checkWallet = createServerFn({ method: "POST" })
@@ -301,18 +305,21 @@ export const checkWallet = createServerFn({ method: "POST" })
           ? "OpenSea listings are not configured yet. Admin-curated projects can still be checked."
           : "OpenSea listings are temporarily unavailable. Admin-curated projects were still checked.";
     }
+    const uniqueManual = dedupeProjectResults(manual);
     const manualSlugs = new Set(
-      manual
+      uniqueManual
         .filter((item) => item.opensea_slug)
-        .map((item) => `${item.chain}:${item.opensea_slug}`),
+        .map((item) => collectionIdentityKey(item.chain, item.opensea_slug!)),
     );
     return {
       error: null,
       kind,
-      items: [
-        ...manual,
-        ...drops.filter((drop) => !manualSlugs.has(`${drop.chain}:${drop.opensea_slug}`)),
-      ],
+      items: dedupeProjectResults([
+        ...uniqueManual,
+        ...drops.filter(
+          (drop) => !manualSlugs.has(collectionIdentityKey(drop.chain, drop.opensea_slug ?? "")),
+        ),
+      ]),
       sourceWarning,
     };
   });

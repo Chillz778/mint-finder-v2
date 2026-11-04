@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CHAIN_OPTIONS,
+  dedupeProjectResults,
   detectWalletKind,
   isMintingOrUpcoming,
   normalizeWallet,
@@ -29,6 +30,62 @@ describe("supported network wallet handling", () => {
     );
     const solanaAddress = "AbCdEf123456789ABCDEFGHJKLMNPQRSTUVWXYZ";
     expect(normalizeWallet(solanaAddress)).toBe(solanaAddress);
+  });
+
+  it("deduplicates repeated sources by collection slug or project identity", () => {
+    const first = {
+      key: "manual:1",
+      chain: "ethereum",
+      name: "Project Drop",
+      x_handle: "@Project_X",
+      opensea_slug: "project-drop",
+    };
+    const duplicateSlug = {
+      key: "opensea:project",
+      chain: "Ethereum",
+      name: "Different API title",
+      x_handle: null,
+      opensea_slug: "PROJECT-DROP",
+    };
+    const duplicateProject = {
+      key: "opensea:alias",
+      chain: "ethereum",
+      name: "Project-Drop",
+      x_handle: "project_x",
+      opensea_slug: "project-drop-alias",
+    };
+    const differentProject = {
+      key: "opensea:other",
+      chain: "ethereum",
+      name: "Project Drop",
+      x_handle: "another_handle",
+      opensea_slug: "another-project-drop",
+    };
+    const anotherChain = {
+      key: "opensea:base",
+      chain: "base",
+      name: "Project Drop",
+      x_handle: "project_x",
+      opensea_slug: "project-drop",
+    };
+    const noSlug = {
+      key: "manual:2",
+      chain: "ethereum",
+      name: "Unlinked project",
+      x_handle: null,
+      opensea_slug: null,
+    };
+
+    expect(
+      dedupeProjectResults([
+        first,
+        duplicateSlug,
+        duplicateProject,
+        differentProject,
+        anotherChain,
+        noSlug,
+      ]),
+    ).toEqual([first, differentProject, anotherChain, noSlug]);
   });
 
   it("only keeps drops that are live or have a future mint stage", () => {
