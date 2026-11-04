@@ -230,6 +230,14 @@
   color: var(--deep-green);
 }
 
+.brand-logo {
+  display: block;
+  width: 31px;
+  height: 31px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+}
+
 .brand-light {
   color: #78827b;
   font-weight: 500;
@@ -1550,6 +1558,12 @@
 }
 
 .footer-brand .brand-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+}
+
+.footer-brand .brand-logo {
   width: 26px;
   height: 26px;
   border-radius: 8px;

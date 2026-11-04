@@ -379,9 +379,7 @@ function Index() {
           Public user active
         </button>
         <a className="brand" href="#top" aria-label="Mint Finder home">
-          <span className="brand-mark">
-            <Sparkles size={17} strokeWidth={2.2} />
-          </span>
+          <img className="brand-logo" src="/mintfinder-logo.svg" alt="" />
           <span>
             mint<span className="brand-light">finder</span>
           </span>
@@ -989,9 +987,7 @@ function Index() {
 
       <footer className="site-footer">
         <a className="brand footer-brand" href="#top">
-          <span className="brand-mark">
-            <Sparkles size={15} />
-          </span>
+          <img className="brand-logo" src="/mintfinder-logo.svg" alt="" />
           <span>
             mint<span className="brand-light">finder</span>
           </span>

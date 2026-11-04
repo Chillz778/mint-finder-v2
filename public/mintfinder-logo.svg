@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Mint Finder">
+  <rect x="1" y="1" width="46" height="46" rx="14" fill="#c5eb9a"/>
+  <path d="M35.8 10.2C23.1 10.8 13 17.1 11.4 27.3c-1 6.4 3 11.2 9.1 10.8 10.4-.7 17.1-11.4 15.3-27.9Z" fill="#203d2c"/>
+  <path d="M16.7 34.9c4-7.1 9.2-12.9 16.3-18.3" fill="none" stroke="#c5eb9a" stroke-linecap="round" stroke-width="2.6"/>
+  <path d="m23.6 26.6 5.3.3M27.4 21.8l4.5.1" fill="none" stroke="#c5eb9a" stroke-linecap="round" stroke-width="1.8"/>
+</svg>
