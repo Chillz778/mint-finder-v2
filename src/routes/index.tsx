@@ -644,7 +644,6 @@ function Index() {
                       {drop.image && (
                         <img src={drop.image} alt="" loading="lazy" referrerPolicy="no-referrer" />
                       )}
-                      <span className="art-grain" />
                       {!drop.image && (
                         <span className="art-emblem">{drop.name.slice(0, 2).toUpperCase()}</span>
                       )}
