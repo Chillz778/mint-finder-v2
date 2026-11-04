@@ -7,7 +7,9 @@ import {
   loginWithAdminPassword,
   requireAdminSession,
 } from "./admin-auth.server";
+import { CHAIN_OPTIONS, chainKind, normalizeWallet } from "./chains";
 
+const chainValues = CHAIN_OPTIONS.map((chain) => chain.value) as [string, ...string[]];
 const projectSchema = z.object({
   name: z.string().trim().min(1).max(200),
   x_handle: z.string().max(100).nullable(),
@@ -16,6 +18,7 @@ const projectSchema = z.object({
   image_url: z.string().url().max(1000).nullable(),
   website: z.string().url().max(1000).nullable(),
   mint_url: z.string().url().max(1000).nullable(),
+  chain: z.enum(chainValues),
   rule: z.enum(["check_site", "public", "allowlist", "holder", "opensea"]),
   holder_contract: z.string().max(100).nullable(),
   opensea_slug: z.string().max(200).nullable(),
@@ -45,8 +48,7 @@ export const getAdminProjects = createServerFn({ method: "GET" })
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { data, error } = await supabaseAdmin
       .from("projects")
-      .select("id, name")
-      .eq("chain", "ethereum")
+      .select("id, name, chain")
       .order("created_at", { ascending: false });
     if (error) throw new Error(`Could not load projects: ${error.message}`);
     return data ?? [];
@@ -61,9 +63,8 @@ export const createAdminProject = createServerFn({ method: "POST" })
       .from("projects")
       .insert({
         ...data,
-        chain: "ethereum",
       })
-      .select("id, name")
+      .select("id, name, chain")
       .single();
     if (error) throw new Error(`Could not add project: ${error.message}`);
     return project;
@@ -75,19 +76,35 @@ export const uploadAdminAllowlist = createServerFn({ method: "POST" })
     z
       .object({
         projectId: z.string().uuid(),
-        addresses: z
-          .array(z.string().regex(/^0x[0-9a-fA-F]{40}$/))
-          .min(1)
-          .max(10_000),
+        addresses: z.array(z.string().min(32).max(44)).min(1).max(10_000),
       })
       .parse(input),
   )
   .handler(async ({ data }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: project, error: projectError } = await supabaseAdmin
+      .from("projects")
+      .select("chain")
+      .eq("id", data.projectId)
+      .single();
+    if (projectError) throw new Error(`Could not load project: ${projectError.message}`);
+    const isSolana = chainKind(project.chain) === "solana";
+    const isValidAddress = (address: string) =>
+      isSolana
+        ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)
+        : /^0x[0-9a-fA-F]{40}$/.test(address);
+    const invalidCount = data.addresses.filter((address) => !isValidAddress(address)).length;
+    if (invalidCount > 0) {
+      throw new Error(
+        isSolana
+          ? `${invalidCount} address(es) are invalid. Use Solana base58 addresses.`
+          : `${invalidCount} address(es) are invalid. Use EVM 0x addresses.`,
+      );
+    }
     for (let offset = 0; offset < data.addresses.length; offset += 500) {
       const batch = data.addresses.slice(offset, offset + 500).map((wallet) => ({
         project_id: data.projectId,
-        wallet: wallet.toLowerCase(),
+        wallet: normalizeWallet(wallet),
       }));
       const { error } = await supabaseAdmin
         .from("allowlist_entries")

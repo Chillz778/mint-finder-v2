@@ -2,9 +2,14 @@ export type WalletKind = "evm" | "solana";
 
 export const CHAIN_OPTIONS = [
   { value: "ethereum", label: "Ethereum", kind: "evm" as WalletKind },
+  { value: "base", label: "Base", kind: "evm" as WalletKind },
   { value: "robinhood", label: "Robinhood Chain", kind: "evm" as WalletKind },
   { value: "solana", label: "Solana", kind: "solana" as WalletKind },
 ];
+
+export const EVM_CHAINS = CHAIN_OPTIONS.filter((chain) => chain.kind === "evm").map(
+  (chain) => chain.value,
+);
 
 export const RULE_OPTIONS = [
   { value: "public", label: "Public mint — anyone can mint" },
@@ -20,6 +25,14 @@ export function chainKind(chain: string): WalletKind {
 
 export function chainLabel(chain: string) {
   return CHAIN_OPTIONS.find((c) => c.value === chain)?.label ?? chain;
+}
+
+export function isMintingOrUpcoming(
+  isMinting: boolean,
+  nextStartTime: string | null,
+  now = Date.now(),
+) {
+  return isMinting || (nextStartTime != null && Date.parse(nextStartTime) > now);
 }
 
 export function detectWalletKind(address: string): WalletKind | null {
@@ -45,6 +58,7 @@ export function parseXHandle(input: string): string | null {
 }
 
 export type Status = "eligible" | "not_eligible" | "sign_in" | "check_site" | "unknown";
+export type EligibilityType = "public" | "whitelist" | "holder" | "site";
 
 export type ResultItem = {
   key: string;
@@ -54,6 +68,7 @@ export type ResultItem = {
   chain: string;
   source: "opensea" | "manual";
   status: Status;
+  eligibility_type: EligibilityType;
   detail: string;
   mint_url: string | null;
   start_time: string | null;

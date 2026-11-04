@@ -23,11 +23,17 @@ npm i
 npm run dev
 ```
 
-## Ethereum MVP setup
+## Supported networks and eligibility checks
 
-The public finder accepts a pasted Ethereum address; it does not connect to a wallet or request a signature. It checks public OpenSea drops and projects configured by the site owner. The admin tools are at `/admin`.
+The public finder accepts a pasted Ethereum/Base/Robinhood Chain EVM address or Solana address. It checks OpenSea featured, upcoming, and recently minted listings (up to 100 active or future-stage OpenSea drops per check); completed drops without a future mint stage are excluded. It also checks projects configured by the site owner. Provider listings are not an exhaustive catalog of every NFT project.
 
-1. Apply `supabase/migrations/20261103230000_initial_schema.sql` to the Supabase project if it has not already been applied. It creates the tables and policies and disables first-signup admin promotion.
+Projects that mint on their own website can be added by the site owner in `/admin`: add the project, select its chain, and save its official website/mint URL. Choose **Check project site** when eligibility cannot be verified from a configured public list. This directs users to the official checker; Mint Finder does not automatically inspect arbitrary websites. For projects with an uploaded allowlist, the app can check the list directly and shows those results in a separate **Whitelist status** section so public mints are not confused with allowlist membership.
+
+For OpenSea-gated EVM drops, the user can choose **Sign in with wallet to check**. This asks the browser wallet to sign OpenSea's login message for the already-entered address. It does not submit a blockchain transaction or ask for a seed phrase. OpenSea's read-only eligibility scope is used for the request, and the app attempts to revoke the temporary token immediately after the check (the token is configured to expire after one day).
+
+The admin tools are at `/admin`. Allowlist uploads accept EVM addresses for Ethereum, Base, and Robinhood Chain projects, and base58 addresses for Solana projects.
+
+1. Apply the migrations in `supabase/migrations` to the Supabase project in filename order if they have not already been applied. The initial migration creates the tables and policies; `20261104180000_chain_aware_allowlist.sql` updates allowlist matching for Solana's case-sensitive addresses.
 2. Configure these environment variables locally and in the hosting provider's secret settings:
    - `SUPABASE_URL`
    - `SUPABASE_PUBLISHABLE_KEY`
@@ -36,7 +42,7 @@ The public finder accepts a pasted Ethereum address; it does not connect to a wa
    - `SUPABASE_SERVICE_ROLE_KEY` (server-only; never use a `VITE_` prefix)
    - `ADMIN_PASSWORD` (choose a private password with at least 16 characters; do not use the disclosed location word)
    - `ADMIN_SESSION_SECRET` (a random server-only secret with at least 32 characters)
-   - `OPENSEA_API_KEY` (enables OpenSea drop discovery and NFT-holder checks)
+   - `OPENSEA_API_KEY` (enables OpenSea drop discovery, holder checks, and gated eligibility checks)
 
    Use `.env.example` as a variable-name reference. Generate a session secret locally with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Keep actual values in `.env` and the hosting provider's server-side secret settings. Never commit them or expose the service-role key, admin password, session secret, or OpenSea key to browser code.
 

@@ -11,6 +11,7 @@ import {
 } from "@/lib/admin.functions";
 import { fetchXProject } from "@/lib/checker.functions";
 import type { Database } from "@/integrations/supabase/types";
+import { CHAIN_OPTIONS, chainLabel } from "@/lib/chains";
 
 export const Route = createFileRoute("/admin")({
   component: Admin,
@@ -26,13 +27,14 @@ type ProjectDraft = {
   image_url: string;
   website: string;
   mint_url: string;
+  chain: string;
   rule: Rule;
   holder_contract: string;
   opensea_slug: string;
   mint_date: string;
   price: string;
 };
-type ProjectOption = { id: string; name: string };
+type ProjectOption = { id: string; name: string; chain: string };
 
 const emptyDraft: ProjectDraft = {
   name: "",
@@ -42,6 +44,7 @@ const emptyDraft: ProjectDraft = {
   image_url: "",
   website: "",
   mint_url: "",
+  chain: "ethereum",
   rule: "check_site",
   holder_contract: "",
   opensea_slug: "",
@@ -173,7 +176,7 @@ function Admin() {
           image_url: draft.image_url.trim() || null,
           website: draft.website.trim() || null,
           mint_url: draft.mint_url.trim() || null,
-          chain: "ethereum",
+          chain: draft.chain,
           rule: draft.rule,
           holder_contract: draft.holder_contract.trim() || null,
           opensea_slug: draft.opensea_slug.trim() || null,
@@ -206,19 +209,25 @@ function Admin() {
           .filter(Boolean),
       ),
     ];
-    const invalid = addresses.filter((address) => !/^0x[0-9a-fA-F]{40}$/.test(address));
+    const project = projects.find((item) => item.id === allowlistProject);
+    const isSolana = project?.chain === "solana";
+    const invalid = addresses.filter((address) =>
+      isSolana
+        ? !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)
+        : !/^0x[0-9a-fA-F]{40}$/.test(address),
+    );
     if (!allowlistProject) {
-      setPageError("Add an Ethereum project before uploading an allowlist.");
+      setPageError("Add a project before uploading an allowlist.");
       setBusy(false);
       return;
     }
     if (addresses.length === 0 || addresses.length > 10_000 || invalid.length > 0) {
       setPageError(
         addresses.length > 10_000
-          ? "Upload up to 10,000 Ethereum addresses at a time."
+          ? "Upload up to 10,000 wallet addresses at a time."
           : invalid.length > 0
-            ? `${invalid.length} address(es) are invalid. Use Ethereum 0x addresses only.`
-            : "Paste at least one Ethereum address.",
+            ? `${invalid.length} address(es) are invalid. Use ${isSolana ? "Solana base58" : "EVM 0x"} addresses for this project.`
+            : "Paste at least one wallet address.",
       );
       setBusy(false);
       return;
@@ -255,7 +264,7 @@ function Admin() {
         <div className="section-kicker">PRIVATE PROJECT TOOLS</div>
         <h1>Project dashboard</h1>
         <p className="admin-intro">
-          Manage Ethereum projects and allowlists. Wallet addresses are only used to check
+          Manage supported-chain projects and allowlists. Wallet addresses are only used to check
           eligibility.
         </p>
 
@@ -304,7 +313,7 @@ function Admin() {
             </div>
 
             <section className="admin-panel">
-              <h2>Add an Ethereum project</h2>
+              <h2>Add a project</h2>
               <p>Paste a public X profile link to prefill details, then review and save.</p>
               <form className="admin-inline-form" onSubmit={lookUpX}>
                 <input
@@ -352,6 +361,19 @@ function Admin() {
                     onChange={(event) => setDraft({ ...draft, mint_url: event.target.value })}
                     placeholder="https://"
                   />
+                </label>
+                <label>
+                  Blockchain
+                  <select
+                    value={draft.chain}
+                    onChange={(event) => setDraft({ ...draft, chain: event.target.value })}
+                  >
+                    {CHAIN_OPTIONS.map((chain) => (
+                      <option key={chain.value} value={chain.value}>
+                        {chain.label}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <label className="admin-wide">
                   Description
@@ -404,7 +426,7 @@ function Admin() {
 
             <section className="admin-panel">
               <h2>Upload an allowlist</h2>
-              <p>Paste Ethereum addresses separated by new lines, spaces, or commas.</p>
+              <p>Paste addresses for the selected project’s chain, separated by lines or commas.</p>
               <form className="admin-fields" onSubmit={uploadAllowlist}>
                 <label className="admin-wide">
                   Project
@@ -416,7 +438,7 @@ function Admin() {
                     <option value="">Select a project</option>
                     {projects.map((project) => (
                       <option value={project.id} key={project.id}>
-                        {project.name}
+                        {project.name} · {chainLabel(project.chain)}
                       </option>
                     ))}
                   </select>

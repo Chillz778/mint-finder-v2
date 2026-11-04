@@ -13,8 +13,15 @@ import {
 import { useMemo, useState, type FormEvent } from "react";
 
 import { adminLogin } from "@/lib/admin.functions";
-import { checkWallet } from "@/lib/checker.functions";
-import { chainLabel, detectWalletKind, type ResultItem } from "@/lib/chains";
+import { checkWallet, openseaEligibility, openseaNonce } from "@/lib/checker.functions";
+import {
+  buildSiweMessage,
+  CHAIN_OPTIONS,
+  chainLabel,
+  detectWalletKind,
+  siweText,
+  type ResultItem,
+} from "@/lib/chains";
 
 export const Route = createFileRoute("/")({
   component: Index,
@@ -30,12 +37,27 @@ function statusLabel(status: ResultItem["status"]) {
     case "not_eligible":
       return "Not eligible";
     case "sign_in":
-      return "Sign in required";
+      return "OpenSea sign-in required";
     case "check_site":
       return "Check project site";
     case "unknown":
       return "Could not verify";
   }
+}
+
+function chainDotClass(chain: string) {
+  if (chain === "solana") return "sol-dot";
+  if (chain === "robinhood") return "rh-dot";
+  if (chain === "base") return "base-dot";
+  return "eth-dot";
+}
+
+function whitelistStatusLabel(item: ResultItem) {
+  if (item.status === "eligible") return "Whitelisted";
+  if (item.status === "not_eligible") return "Not on whitelist";
+  if (item.status === "sign_in") return "OpenSea sign-in required";
+  if (item.status === "unknown") return "Could not verify";
+  return "Check official site";
 }
 
 function Index() {
@@ -51,10 +73,24 @@ function Index() {
   const [adminDialog, setAdminDialog] = useState<"question" | "password" | null>(null);
   const [adminError, setAdminError] = useState("");
   const [adminBusy, setAdminBusy] = useState(false);
+  const [eligibilityBusy, setEligibilityBusy] = useState("");
+  const [eligibilityMessages, setEligibilityMessages] = useState<Record<string, string>>({});
+
+  const whitelistItems = useMemo(() => {
+    const searchTerm = query.trim().toLowerCase();
+    return (results ?? []).filter(
+      (item) =>
+        item.eligibility_type === "whitelist" &&
+        (!searchTerm ||
+          item.name.toLowerCase().includes(searchTerm) ||
+          (item.x_handle ?? "").toLowerCase().includes(searchTerm)),
+    );
+  }, [query, results]);
 
   const visibleDrops = useMemo(() => {
     const searchTerm = query.trim().toLowerCase();
     return (results ?? []).filter((drop) => {
+      if (drop.eligibility_type === "whitelist") return false;
       const matchesFilter =
         filter === "All results" ||
         (filter === "Eligible" && drop.status === "eligible") ||
@@ -69,12 +105,96 @@ function Index() {
     });
   }, [filter, query, results]);
 
+  async function checkOpenSeaEligibility(drop: ResultItem) {
+    if (!drop.opensea_slug) return;
+    const provider = (
+      window as Window & {
+        ethereum?: { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> };
+      }
+    ).ethereum;
+    if (!provider) {
+      setEligibilityMessages((current) => ({
+        ...current,
+        [drop.key]: "Install or open an Ethereum wallet extension, or use the OpenSea link.",
+      }));
+      return;
+    }
+
+    setEligibilityBusy(drop.key);
+    setEligibilityMessages((current) => ({ ...current, [drop.key]: "" }));
+    try {
+      const accounts = await provider.request({ method: "eth_requestAccounts" });
+      const account = Array.isArray(accounts) && typeof accounts[0] === "string" ? accounts[0] : "";
+      if (!account || account.toLowerCase() !== wallet.trim().toLowerCase()) {
+        setEligibilityMessages((current) => ({
+          ...current,
+          [drop.key]: "Connect the same wallet address you checked above, then try again.",
+        }));
+        return;
+      }
+
+      const { nonce } = await openseaNonce();
+      const message = buildSiweMessage(account, nonce, new Date().toISOString());
+      const signature = await provider.request({
+        method: "personal_sign",
+        params: [siweText(message), account],
+      });
+      if (typeof signature !== "string") {
+        throw new Error("The wallet did not return a signature.");
+      }
+      const response = await openseaEligibility({
+        data: { message, signature, slugs: [drop.opensea_slug] },
+      });
+      if (response.error) {
+        const errorMessage = response.error;
+        setEligibilityMessages((current) => ({ ...current, [drop.key]: errorMessage }));
+        return;
+      }
+      const result = response.results[drop.opensea_slug];
+      if (!result) {
+        setEligibilityMessages((current) => ({
+          ...current,
+          [drop.key]: "OpenSea couldn't verify this drop right now. Try its official page.",
+        }));
+        return;
+      }
+      setResults(
+        (current) =>
+          current?.map((item) =>
+            item.key === drop.key
+              ? {
+                  ...item,
+                  status: result.eligible ? "eligible" : "not_eligible",
+                  eligibility_type: "whitelist",
+                  detail: result.eligible
+                    ? `Whitelisted for ${result.stages.join(", ") || "an OpenSea stage"}`
+                    : "OpenSea did not whitelist this wallet for an available stage",
+                }
+              : item,
+          ) ?? null,
+      );
+    } catch (error) {
+      const walletError = error as { code?: number };
+      setEligibilityMessages((current) => ({
+        ...current,
+        [drop.key]:
+          walletError.code === 4001
+            ? "Signature cancelled. No transaction was sent."
+            : error instanceof Error
+              ? error.message
+              : "OpenSea eligibility check failed. Try the OpenSea link.",
+      }));
+    } finally {
+      setEligibilityBusy("");
+    }
+  }
+
   async function handleWalletSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const kind = detectWalletKind(wallet);
 
-    if (kind !== "evm") {
-      setWalletError("Enter a valid Ethereum (0x...) address for this first version.");
+    if (!kind) {
+      setWalletError("Enter a valid EVM (0x...) or Solana address.");
       setWalletMessage("");
       return;
     }
@@ -84,6 +204,7 @@ function Index() {
     setWalletMessage("");
     setResults(null);
     setSourceWarning("");
+    setEligibilityMessages({});
     setFilter("All results");
 
     try {
@@ -161,8 +282,7 @@ function Index() {
         </nav>
 
         <div className="header-note">
-          <span className="live-dot" />
-          Ethereum MVP
+          <span className="live-dot" />4 supported networks
         </div>
       </header>
 
@@ -254,8 +374,8 @@ function Index() {
               might be <span>closer</span> than you think.
             </h1>
             <p className="hero-description">
-              Check Ethereum mint opportunities for a public wallet address. No wallet connection,
-              signature, or seed phrase required.
+              Check public wallet eligibility across Ethereum, Base, Robinhood Chain, and Solana. No
+              connection is needed unless you choose to verify a gated OpenSea drop.
             </p>
             <div className="hero-proof">
               <span>
@@ -293,7 +413,7 @@ function Index() {
                   setWalletMessage("");
                   setWalletError("");
                 }}
-                placeholder="0x... Ethereum address"
+                placeholder="0x... EVM or Solana address"
               />
               <button type="submit" disabled={isChecking}>
                 {isChecking ? "Checking..." : "Check address"}{" "}
@@ -301,10 +421,12 @@ function Index() {
               </button>
             </form>
             <div className="supported-chains">
-              <span>SUPPORTED</span>
-              <span className="chain-label">
-                <i className="chain-dot eth-dot" /> Ethereum
-              </span>
+              <span>NETWORKS</span>
+              {CHAIN_OPTIONS.map((chain) => (
+                <span className="chain-label" key={chain.value}>
+                  <i className={`chain-dot ${chainDotClass(chain.value)}`} /> {chain.label}
+                </span>
+              ))}
             </div>
             {walletMessage && (
               <p className="wallet-feedback" role="status">
@@ -329,7 +451,7 @@ function Index() {
           <span className="trust-separator" />
           <div>
             <Layers3 size={17} />
-            <span>Ethereum, one simple check</span>
+            <span>Four networks, one simple check</span>
           </div>
           <span className="trust-separator" />
           <div>
@@ -378,11 +500,89 @@ function Index() {
             </div>
           </div>
 
+          {!isChecking && whitelistItems.length > 0 && (
+            <section className="whitelist-section" aria-labelledby="whitelist-heading">
+              <div className="whitelist-heading">
+                <div>
+                  <div className="section-kicker">PRIVATE AND GATED MINTS</div>
+                  <h3 id="whitelist-heading">Whitelist status</h3>
+                  <p>
+                    Separate from public mints: public means anyone can mint; whitelist status is
+                    checked for each project.
+                  </p>
+                </div>
+              </div>
+              <div className="whitelist-grid">
+                {whitelistItems.map((item) => (
+                  <article className="whitelist-card" key={item.key}>
+                    <div className="whitelist-card-title">
+                      <div>
+                        <h4>{item.name}</h4>
+                        {item.x_handle && (
+                          <a
+                            className="x-handle"
+                            href={`https://x.com/${item.x_handle.replace(/^@/, "")}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            @{item.x_handle.replace(/^@/, "")}
+                          </a>
+                        )}
+                      </div>
+                      <span
+                        className={`whitelist-status ${item.status === "eligible" ? "whitelist-status-yes" : item.status === "not_eligible" ? "whitelist-status-no" : ""}`}
+                      >
+                        {whitelistStatusLabel(item)}
+                      </span>
+                    </div>
+                    <p>{item.detail}</p>
+                    <div className="whitelist-card-footer">
+                      <span className="chain-pill">
+                        <i className={`chain-dot ${chainDotClass(item.chain)}`} />
+                        {chainLabel(item.chain)}
+                      </span>
+                      {item.mint_url && (
+                        <a href={item.mint_url} target="_blank" rel="noreferrer">
+                          Official mint/checker <ArrowUpRight size={13} />
+                        </a>
+                      )}
+                    </div>
+                    {item.status === "sign_in" && (
+                      <div className="eligibility-action">
+                        {detectWalletKind(wallet) === "evm" && item.opensea_slug ? (
+                          <button
+                            type="button"
+                            disabled={eligibilityBusy !== ""}
+                            onClick={() => void checkOpenSeaEligibility(item)}
+                          >
+                            {eligibilityBusy === item.key
+                              ? "Waiting for wallet…"
+                              : "Sign in with wallet to check"}
+                          </button>
+                        ) : (
+                          <span>Use the project’s official page to check eligibility.</span>
+                        )}
+                        <p>
+                          Message signature only; no transaction. The connected wallet must match.
+                        </p>
+                        {eligibilityMessages[item.key] && (
+                          <p className="eligibility-message" role="status">
+                            {eligibilityMessages[item.key]}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
+
           {isChecking ? (
             <div className="empty-state" role="status">
               <span className="loading-ring" />
               <h3>Checking your wallet</h3>
-              <p>Looking for public drops and configured project lists.</p>
+              <p>Looking for featured, upcoming, recently minted, and configured projects.</p>
             </div>
           ) : visibleDrops.length > 0 ? (
             <div className="drop-grid">
@@ -435,7 +635,7 @@ function Index() {
                     <p className="drop-description">{drop.detail}</p>
                     <div className="drop-card-footer">
                       <span className="chain-pill">
-                        <i className="chain-dot eth-dot" />
+                        <i className={`chain-dot ${chainDotClass(drop.chain)}`} />
                         {chainLabel(drop.chain)}
                       </span>
                       <span className="drop-date">
@@ -446,6 +646,12 @@ function Index() {
                   </div>
                 </article>
               ))}
+            </div>
+          ) : whitelistItems.length > 0 ? (
+            <div className="empty-state">
+              <Search size={22} />
+              <h3>Whitelist results are shown above</h3>
+              <p>No matching public mint opportunities or holder checks were found.</p>
             </div>
           ) : results ? (
             <div className="empty-state">
@@ -467,7 +673,8 @@ function Index() {
               <Search size={22} />
               <h3>Ready when you are</h3>
               <p>
-                Enter an Ethereum wallet address above to check live sources and your project list.
+                Enter a supported EVM or Solana wallet address above to check available sources and
+                configured projects.
               </p>
             </div>
           )}
@@ -503,7 +710,7 @@ function Index() {
                 <Wallet size={19} />
               </div>
               <h3>Paste an address</h3>
-              <p>Use a public wallet address. No connection or signature needed to get started.</p>
+              <p>Use a public wallet address. Connection is optional for OpenSea gated checks.</p>
             </div>
             <div className="step-connector" />
             <div className="how-step">

@@ -3,7 +3,14 @@ import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { requireAdminSession } from "./admin-auth.server";
 import type { Database } from "@/integrations/supabase/types";
-import { detectWalletKind, normalizeWallet, parseXHandle, type ResultItem } from "./chains";
+import {
+  CHAIN_OPTIONS,
+  detectWalletKind,
+  isMintingOrUpcoming,
+  normalizeWallet,
+  parseXHandle,
+  type ResultItem,
+} from "./chains";
 
 const OS = "https://api.opensea.io";
 type JsonObject = Record<string, unknown>;
@@ -21,6 +28,7 @@ type OpenSeaDrop = {
   chain: string;
   image_url: string | null;
   opensea_url: string | null;
+  is_minting: boolean;
   active_stage: OpenSeaStage | null;
   next_stage: OpenSeaStage | null;
 };
@@ -58,13 +66,14 @@ function parseDrop(value: unknown): OpenSeaDrop | null {
   const slug = drop && stringField(drop, "collection_slug");
   const name = drop && stringField(drop, "collection_name");
   const chain = drop && stringField(drop, "chain");
-  if (!drop || !slug || !name || !chain) return null;
+  if (!drop || !slug || !chain) return null;
   return {
     collection_slug: slug,
-    collection_name: name,
+    collection_name: name ?? slug.replace(/[-_]/g, " "),
     chain,
     image_url: stringField(drop, "image_url"),
     opensea_url: stringField(drop, "opensea_url"),
+    is_minting: drop["is_minting"] === true,
     active_stage: parseStage(drop["active_stage"]),
     next_stage: parseStage(drop["next_stage"]),
   };
@@ -122,11 +131,13 @@ function weiToEth(wei: string | null | undefined) {
   }
 }
 
-async function loadDrops(): Promise<ResultItem[]> {
-  const lists = await Promise.all([
-    osGet("/api/v2/drops?type=featured&limit=30"),
-    osGet("/api/v2/drops?type=upcoming&limit=30"),
-  ]);
+async function loadDrops(chains: string[]): Promise<ResultItem[]> {
+  const chainFilter = encodeURIComponent(chains.join(","));
+  const lists = await Promise.all(
+    ["featured", "upcoming", "recently_minted"].map((type) =>
+      osGet(`/api/v2/drops?type=${type}&limit=100&chains=${chainFilter}`),
+    ),
+  );
   if (lists.every((list) => list == null)) {
     throw new Error("OpenSea drop listings are unavailable");
   }
@@ -134,25 +145,35 @@ async function loadDrops(): Promise<ResultItem[]> {
   for (const l of lists) {
     for (const rawDrop of asObjects(l?.["drops"])) {
       const drop = parseDrop(rawDrop);
-      if (drop?.chain === "ethereum" && !seen.has(drop.collection_slug)) {
-        seen.set(drop.collection_slug, drop);
+      const key = drop ? `${drop.chain}:${drop.collection_slug}` : "";
+      if (drop && chains.includes(drop.chain) && !seen.has(key)) {
+        seen.set(key, drop);
       }
     }
   }
-  const drops = [...seen.values()];
-  const handles = await Promise.all(
-    drops.map(async (d) => {
-      const c = await osGet(`/api/v2/collections/${encodeURIComponent(d.collection_slug)}`);
-      return {
-        x: c ? stringField(c, "twitter_username") : null,
-        site: c ? stringField(c, "project_url") : null,
-      };
-    }),
-  );
+  const drops = [...seen.values()]
+    .filter((drop) => isMintingOrUpcoming(drop.is_minting, drop.next_stage?.start_time ?? null))
+    .slice(0, 100);
+  const handles: Array<{ x: string | null; site: string | null }> = [];
+  for (let offset = 0; offset < drops.length; offset += 10) {
+    const batch = await Promise.all(
+      drops.slice(offset, offset + 10).map(async (drop) => {
+        const collection = await osGet(
+          `/api/v2/collections/${encodeURIComponent(drop.collection_slug)}`,
+        );
+        return {
+          x: collection ? stringField(collection, "twitter_username") : null,
+          site: collection ? stringField(collection, "project_url") : null,
+        };
+      }),
+    );
+    handles.push(...batch);
+  }
   return drops.map((d, i) => {
-    const stage = d.active_stage ?? d.next_stage;
+    const stage = d.is_minting ? d.active_stage : d.next_stage;
     const handle = handles[i];
     const isPublic = stage?.stage_type === "public_sale";
+    const status = isPublic ? "eligible" : stage ? "sign_in" : "check_site";
     return {
       key: `os:${d.collection_slug}`,
       name: d.collection_name,
@@ -160,10 +181,16 @@ async function loadDrops(): Promise<ResultItem[]> {
       image: d.image_url ?? null,
       chain: d.chain,
       source: "opensea",
-      status: isPublic ? "eligible" : "sign_in",
-      detail: isPublic
-        ? `${stage?.label ?? "Public stage"} — open to every wallet`
-        : `${stage?.label ?? "Restricted stage"} — sign in with OpenSea to see if you're on the list`,
+      status,
+      eligibility_type: isPublic ? "public" : stage ? "whitelist" : "site",
+      detail:
+        status === "eligible"
+          ? `${stage?.label ?? "Public stage"} — open to every wallet`
+          : status === "sign_in"
+            ? `${stage?.label ?? "Restricted stage"} — sign in with OpenSea to check eligibility`
+            : d.is_minting
+              ? "Minting is live — check the official page for details"
+              : "No active or upcoming stage listed — check the project site",
       mint_url: d.opensea_url ?? handle?.site ?? null,
       start_time: stage?.start_time ?? null,
       price: weiToEth(stage?.price),
@@ -184,10 +211,13 @@ export const checkWallet = createServerFn({ method: "POST" })
       };
     const wallet = normalizeWallet(data.address);
     const db = publicDb();
+    const supportedChains = CHAIN_OPTIONS.filter((chain) => chain.kind === kind).map(
+      (chain) => chain.value,
+    );
     const [{ data: projects, error: projectsError }, { data: listed, error: allowlistError }] =
       await Promise.all([
         db.from("projects").select("*").order("created_at", { ascending: false }).limit(500),
-        db.rpc("allowlisted_projects", { _wallet: wallet }),
+        db.rpc("allowlisted_projects", { _wallet: data.address.trim() }),
       ]);
     if (projectsError) throw projectsError;
     if (allowlistError) throw allowlistError;
@@ -195,20 +225,24 @@ export const checkWallet = createServerFn({ method: "POST" })
 
     const manual: ResultItem[] = await Promise.all(
       (projects ?? [])
-        .filter((p) => kind === "evm" && p.chain === "ethereum")
+        .filter((project) => supportedChains.includes(project.chain))
         .map(async (p) => {
           let status: ResultItem["status"] = "check_site";
+          let eligibilityType: ResultItem["eligibility_type"] = "site";
           let detail = "Check your status on the project's mint site";
           if (p.rule === "public") {
             status = "eligible";
+            eligibilityType = "public";
             detail = "Public mint — open to every wallet";
           } else if (p.rule === "allowlist") {
             status = listedSet.has(p.id) ? "eligible" : "not_eligible";
+            eligibilityType = "whitelist";
             detail =
               status === "eligible"
-                ? "Your wallet is on the allowlist"
-                : "Your wallet is not on the allowlist";
+                ? "Your wallet is on this project's whitelist"
+                : "Your wallet is not on this project's whitelist";
           } else if (p.rule === "holder" && p.holder_contract) {
+            eligibilityType = "holder";
             let r: JsonObject | null = null;
             try {
               r = await osGet(
@@ -229,7 +263,8 @@ export const checkWallet = createServerFn({ method: "POST" })
             }
           } else if (p.rule === "opensea" && p.opensea_slug) {
             status = "sign_in";
-            detail = "Sign in with OpenSea to see if you're on the list";
+            eligibilityType = "whitelist";
+            detail = "Sign in with OpenSea to verify whitelist eligibility";
           }
           return {
             key: `m:${p.id}`,
@@ -239,6 +274,7 @@ export const checkWallet = createServerFn({ method: "POST" })
             chain: p.chain,
             source: "manual",
             status,
+            eligibility_type: eligibilityType,
             detail,
             mint_url: p.mint_url ?? p.website,
             start_time: p.mint_date,
@@ -250,22 +286,27 @@ export const checkWallet = createServerFn({ method: "POST" })
 
     let drops: ResultItem[] = [];
     let sourceWarning: string | null = null;
-    if (kind === "evm") {
-      try {
-        drops = await loadDrops();
-      } catch (error) {
-        console.error("OpenSea drop lookup failed", error);
-        sourceWarning =
-          error instanceof Error && error.message === "OpenSea key missing"
-            ? "OpenSea listings are not configured yet. Admin-curated Ethereum projects can still be checked."
-            : "OpenSea listings are temporarily unavailable. Admin-curated Ethereum projects were still checked.";
-      }
+    try {
+      drops = await loadDrops(supportedChains);
+    } catch (error) {
+      console.error("OpenSea drop lookup failed", error);
+      sourceWarning =
+        error instanceof Error && error.message === "OpenSea key missing"
+          ? "OpenSea listings are not configured yet. Admin-curated projects can still be checked."
+          : "OpenSea listings are temporarily unavailable. Admin-curated projects were still checked.";
     }
-    const manualSlugs = new Set(manual.map((m) => m.opensea_slug).filter(Boolean));
+    const manualSlugs = new Set(
+      manual
+        .filter((item) => item.opensea_slug)
+        .map((item) => `${item.chain}:${item.opensea_slug}`),
+    );
     return {
       error: null,
       kind,
-      items: [...manual, ...drops.filter((d) => !manualSlugs.has(d.opensea_slug))],
+      items: [
+        ...manual,
+        ...drops.filter((drop) => !manualSlugs.has(`${drop.chain}:${drop.opensea_slug}`)),
+      ],
       sourceWarning,
     };
   });
@@ -335,45 +376,62 @@ export const openseaEligibility = createServerFn({ method: "POST" })
       return { error: "OpenSea sign-in worked, but the check couldn't start.", results: {} };
     }
     const patJson = asObject(await pat.json()) ?? {};
-    const subjectToken = firstString(patJson, ["token", "value", "accessToken", "pat", "secret"]);
     const patId = firstString(patJson, ["id", "tokenId"]);
-    if (!subjectToken) throw new Error("OpenSea did not return a sign-in token");
+    if (!patId) throw new Error("OpenSea did not provide an ID for the temporary eligibility pass");
 
-    const ex = await fetch(`${OS}/api/v2/auth/tokens/exchange`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ subjectToken, subjectTokenType: "ACCESS_TOKEN" }),
-    });
-    if (!ex.ok) {
-      console.error("exchange", ex.status, (await ex.text()).slice(0, 300));
-      return { error: "OpenSea didn't issue a check pass.", results: {} };
-    }
-    const accessToken = stringField(asObject(await ex.json()) ?? {}, "accessToken");
-    if (!accessToken) throw new Error("OpenSea did not return an eligibility token");
-
-    const results: Record<string, { eligible: boolean; stages: string[] } | null> = {};
-    await Promise.all(
-      data.slugs.map(async (slug) => {
-        const r = await osGet(`/api/v2/drops/${encodeURIComponent(slug)}/eligibility`, {
-          Authorization: `Bearer ${accessToken}`,
-        });
-        if (!r) return void (results[slug] = null);
-        const stages = asObjects(r["stages"]);
-        const ok = stages.filter((stage) => stage["is_eligible"] === true);
-        results[slug] = {
-          eligible: ok.length > 0,
-          stages: ok.map((stage) => firstString(stage, ["label", "stage_type"]) ?? "Stage"),
-        };
-      }),
-    );
-
-    if (patId) {
-      fetch(`${OS}/api/v2/auth/tokens/${encodeURIComponent(patId)}`, {
+    const revokeTemporaryToken = async () => {
+      if (!patId) return;
+      const revoke = await fetch(`${OS}/api/v2/auth/tokens/${encodeURIComponent(patId)}`, {
         method: "DELETE",
         headers: { cookie },
-      }).catch(() => {});
+      });
+      if (!revoke.ok) throw new Error("OpenSea couldn't revoke the temporary eligibility pass.");
+    };
+
+    let response: {
+      error: string | null;
+      results: Record<string, { eligible: boolean; stages: string[] } | null>;
+    };
+    try {
+      const subjectToken = firstString(patJson, ["token", "value", "accessToken", "pat", "secret"]);
+      if (!subjectToken) throw new Error("OpenSea did not return a sign-in token");
+      const ex = await fetch(`${OS}/api/v2/auth/tokens/exchange`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ subjectToken, subjectTokenType: "ACCESS_TOKEN" }),
+      });
+      if (!ex.ok) {
+        console.error("exchange", ex.status, (await ex.text()).slice(0, 300));
+        response = { error: "OpenSea didn't issue a check pass.", results: {} };
+      } else {
+        const accessToken = stringField(asObject(await ex.json()) ?? {}, "accessToken");
+        if (!accessToken) throw new Error("OpenSea did not return an eligibility token");
+
+        const results: Record<string, { eligible: boolean; stages: string[] } | null> = {};
+        await Promise.all(
+          data.slugs.map(async (slug) => {
+            const result = await osGet(`/api/v2/drops/${encodeURIComponent(slug)}/eligibility`, {
+              Authorization: `Bearer ${accessToken}`,
+            });
+            if (!result) return void (results[slug] = null);
+            const stages = asObjects(result["stages"]);
+            const eligibleStages = stages.filter((stage) => stage["is_eligible"] === true);
+            results[slug] = {
+              eligible: eligibleStages.length > 0,
+              stages: eligibleStages.map(
+                (stage) => firstString(stage, ["label", "stage_type"]) ?? "Stage",
+              ),
+            };
+          }),
+        );
+        response = { error: null, results };
+      }
+    } catch (error) {
+      await revokeTemporaryToken();
+      throw error;
     }
-    return { error: null, results };
+    await revokeTemporaryToken();
+    return response;
   });
 
 export const fetchXProject = createServerFn({ method: "POST" })
