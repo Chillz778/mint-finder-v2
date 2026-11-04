@@ -809,6 +809,25 @@
   gap: 6px;
 }
 
+.result-group-heading {
+  margin: 4px 0 15px;
+}
+
+.result-group-heading h3 {
+  margin: 7px 0 4px;
+  color: #26382c;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 22px;
+  font-weight: 500;
+}
+
+.result-group-heading p {
+  margin: 0;
+  color: #7d8981;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .filter-button,
 .sort-button {
   display: inline-flex;
@@ -879,24 +898,6 @@
   height: 168px;
   overflow: hidden;
   place-items: center;
-}
-
-.drop-art::before,
-.drop-art::after {
-  position: absolute;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 50%;
-  content: "";
-}
-
-.drop-art::before {
-  width: 185px;
-  height: 185px;
-}
-
-.drop-art::after {
-  width: 131px;
-  height: 131px;
 }
 
 .bloom {

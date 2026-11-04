@@ -27,7 +27,7 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-const filters = ["All results", "Positive results", "No match", "Needs a manual check"] as const;
+const filters = ["All results", "Public mint", "Whitelist mint"] as const;
 type Filter = (typeof filters)[number];
 
 function statusLabel(item: ResultItem) {
@@ -95,11 +95,15 @@ function chainDotClass(chain: string) {
 }
 
 function whitelistStatusLabel(item: ResultItem) {
-  if (item.status === "eligible") return "Whitelisted";
-  if (item.status === "not_eligible") return "Not on whitelist";
+  if (item.status === "eligible") {
+    return item.eligibility_type === "holder" ? "Holder requirement met" : "Whitelisted";
+  }
+  if (item.status === "not_eligible") {
+    return item.eligibility_type === "holder" ? "Holder requirement not met" : "Not on whitelist";
+  }
   if (item.status === "sign_in") return "OpenSea sign-in required";
   if (item.status === "unknown") return "Could not verify";
-  return "Check official site";
+  return "Manual check needed";
 }
 
 function Index() {
@@ -122,7 +126,7 @@ function Index() {
     const searchTerm = query.trim().toLowerCase();
     return (results ?? []).filter(
       (item) =>
-        item.eligibility_type === "whitelist" &&
+        item.eligibility_type !== "public" &&
         (!searchTerm ||
           item.name.toLowerCase().includes(searchTerm) ||
           (item.x_handle ?? "").toLowerCase().includes(searchTerm)),
@@ -132,13 +136,8 @@ function Index() {
   const visibleDrops = useMemo(() => {
     const searchTerm = query.trim().toLowerCase();
     return (results ?? []).filter((drop) => {
-      if (drop.eligibility_type === "whitelist") return false;
-      const matchesFilter =
-        filter === "All results" ||
-        (filter === "Positive results" && drop.status === "eligible") ||
-        (filter === "No match" && drop.status === "not_eligible") ||
-        (filter === "Needs a manual check" &&
-          ["sign_in", "check_site", "unknown"].includes(drop.status));
+      if (drop.eligibility_type !== "public" || filter === "Whitelist mint") return false;
+      const matchesFilter = filter === "All results" || filter === "Public mint";
       const matchesSearch =
         !searchTerm ||
         drop.name.toLowerCase().includes(searchTerm) ||
@@ -536,22 +535,22 @@ function Index() {
                   type="button"
                   aria-pressed={filter === item}
                 >
-                  {item === "Positive results" && <Check size={14} />}
+                  {item === "Public mint" && <Check size={14} />}
                   {item}
                 </button>
               ))}
             </div>
           </div>
 
-          {!isChecking && whitelistItems.length > 0 && (
+          {!isChecking && filter !== "Public mint" && whitelistItems.length > 0 && (
             <section className="whitelist-section" aria-labelledby="whitelist-heading">
               <div className="whitelist-heading">
                 <div>
-                  <div className="section-kicker">PRIVATE AND GATED MINTS</div>
-                  <h3 id="whitelist-heading">Whitelist status</h3>
+                  <div className="section-kicker">WHITELIST AND GATED MINTS</div>
+                  <h3 id="whitelist-heading">Whitelist and gated mints</h3>
                   <p>
-                    OpenSea gates and uploaded allowlists are identified separately. A public stage
-                    is a listing status, not a wallet-specific approval.
+                    Confirmed eligibility, gated checks, and projects that need a manual site check.
+                    Public mint listings are shown separately.
                   </p>
                 </div>
               </div>
@@ -629,74 +628,84 @@ function Index() {
               <p>Looking for featured, upcoming, recently minted, and configured projects.</p>
             </div>
           ) : visibleDrops.length > 0 ? (
-            <div className="drop-grid">
-              {visibleDrops.map((drop, index) => (
-                <article className="drop-card" key={drop.key}>
-                  <div className={`drop-art ${drop.image ? "drop-art-image" : "bloom"}`}>
-                    {drop.image && (
-                      <img src={drop.image} alt="" loading="lazy" referrerPolicy="no-referrer" />
-                    )}
-                    <span className="art-grain" />
-                    {!drop.image && (
-                      <span className="art-emblem">{drop.name.slice(0, 2).toUpperCase()}</span>
-                    )}
-                    <span
-                      className={`status-tag ${drop.status === "eligible" ? "status-eligible" : drop.status === "not_eligible" ? "status-not-eligible" : "status-check"}`}
-                    >
-                      {drop.status === "eligible" && <Check size={12} />}
-                      {statusLabel(drop)}
-                    </span>
-                    <span className="art-index">0{index + 1}</span>
-                  </div>
-                  <div className="drop-card-content">
-                    <div className="drop-title-row">
-                      <div>
-                        <h3>{drop.name}</h3>
-                        {drop.x_handle && (
+            <section className="result-group" aria-labelledby="public-mint-heading">
+              <div className="result-group-heading">
+                <div className="section-kicker">PUBLIC MINTS</div>
+                <h3 id="public-mint-heading">Public mint</h3>
+                <p>
+                  These public stages are listed as open to all wallets; they are not
+                  wallet-specific checks.
+                </p>
+              </div>
+              <div className="drop-grid">
+                {visibleDrops.map((drop, index) => (
+                  <article className="drop-card" key={drop.key}>
+                    <div className={`drop-art ${drop.image ? "drop-art-image" : "bloom"}`}>
+                      {drop.image && (
+                        <img src={drop.image} alt="" loading="lazy" referrerPolicy="no-referrer" />
+                      )}
+                      <span className="art-grain" />
+                      {!drop.image && (
+                        <span className="art-emblem">{drop.name.slice(0, 2).toUpperCase()}</span>
+                      )}
+                      <span
+                        className={`status-tag ${drop.status === "eligible" ? "status-eligible" : drop.status === "not_eligible" ? "status-not-eligible" : "status-check"}`}
+                      >
+                        {drop.status === "eligible" && <Check size={12} />}
+                        {statusLabel(drop)}
+                      </span>
+                      <span className="art-index">0{index + 1}</span>
+                    </div>
+                    <div className="drop-card-content">
+                      <div className="drop-title-row">
+                        <div>
+                          <h3>{drop.name}</h3>
+                          {drop.x_handle && (
+                            <a
+                              className="x-handle"
+                              href={`https://x.com/${drop.x_handle.replace(/^@/, "")}`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              @{drop.x_handle.replace(/^@/, "")}
+                            </a>
+                          )}
+                        </div>
+                        {drop.mint_url ? (
                           <a
-                            className="x-handle"
-                            href={`https://x.com/${drop.x_handle.replace(/^@/, "")}`}
+                            href={drop.mint_url}
                             target="_blank"
                             rel="noreferrer"
+                            aria-label={`Open ${drop.name} mint or project site`}
                           >
-                            @{drop.x_handle.replace(/^@/, "")}
+                            <ArrowUpRight className="card-arrow" size={18} />
                           </a>
+                        ) : (
+                          <ArrowUpRight className="card-arrow" size={18} />
                         )}
                       </div>
-                      {drop.mint_url ? (
-                        <a
-                          href={drop.mint_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          aria-label={`Open ${drop.name} mint or project site`}
-                        >
-                          <ArrowUpRight className="card-arrow" size={18} />
-                        </a>
-                      ) : (
-                        <ArrowUpRight className="card-arrow" size={18} />
-                      )}
+                      <p className="drop-description">{drop.detail}</p>
+                      <ResultProvenance item={drop} />
+                      <div className="drop-card-footer">
+                        <span className="chain-pill">
+                          <i className={`chain-dot ${chainDotClass(drop.chain)}`} />
+                          {chainLabel(drop.chain)}
+                        </span>
+                        <span className="drop-date">
+                          {[drop.start_time, drop.price].filter(Boolean).join(" · ") ||
+                            "Details pending"}
+                        </span>
+                      </div>
                     </div>
-                    <p className="drop-description">{drop.detail}</p>
-                    <ResultProvenance item={drop} />
-                    <div className="drop-card-footer">
-                      <span className="chain-pill">
-                        <i className={`chain-dot ${chainDotClass(drop.chain)}`} />
-                        {chainLabel(drop.chain)}
-                      </span>
-                      <span className="drop-date">
-                        {[drop.start_time, drop.price].filter(Boolean).join(" · ") ||
-                          "Details pending"}
-                      </span>
-                    </div>
-                  </div>
-                </article>
-              ))}
-            </div>
-          ) : whitelistItems.length > 0 ? (
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : filter === "All results" && whitelistItems.length > 0 ? (
             <div className="empty-state">
               <Search size={22} />
-              <h3>Whitelist results are shown above</h3>
-              <p>No matching public mint opportunities or holder checks were found.</p>
+              <h3>Whitelist and gated results are shown above</h3>
+              <p>No public mint listings match this wallet check.</p>
             </div>
           ) : results ? (
             <div className="empty-state">
