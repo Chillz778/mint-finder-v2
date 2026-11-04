@@ -67,6 +67,8 @@ export type ResultItem = {
   image: string | null;
   chain: string;
   source: "opensea" | "manual";
+  source_url: string | null;
+  checked_at: string;
   status: Status;
   eligibility_type: EligibilityType;
   detail: string;

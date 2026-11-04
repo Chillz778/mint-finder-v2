@@ -169,6 +169,7 @@ async function loadDrops(chains: string[]): Promise<ResultItem[]> {
     );
     handles.push(...batch);
   }
+  const checkedAt = new Date().toISOString();
   return drops.map((d, i) => {
     const stage = d.is_minting ? d.active_stage : d.next_stage;
     const handle = handles[i];
@@ -181,11 +182,13 @@ async function loadDrops(chains: string[]): Promise<ResultItem[]> {
       image: d.image_url ?? null,
       chain: d.chain,
       source: "opensea",
+      source_url: `https://opensea.io/collection/${encodeURIComponent(d.collection_slug)}`,
+      checked_at: checkedAt,
       status,
       eligibility_type: isPublic ? "public" : stage ? "whitelist" : "site",
       detail:
         status === "eligible"
-          ? `${stage?.label ?? "Public stage"} — open to every wallet`
+          ? `${stage?.label ?? "Public stage"} — OpenSea lists this as open to every wallet; it is not a wallet-specific eligibility check`
           : status === "sign_in"
             ? `${stage?.label ?? "Restricted stage"} — sign in with OpenSea to check eligibility`
             : d.is_minting
@@ -233,7 +236,8 @@ export const checkWallet = createServerFn({ method: "POST" })
           if (p.rule === "public") {
             status = "eligible";
             eligibilityType = "public";
-            detail = "Public mint — open to every wallet";
+            detail =
+              "The site owner lists this as a public mint. Verify the mint is still open on the project site.";
           } else if (p.rule === "allowlist") {
             status = listedSet.has(p.id) ? "eligible" : "not_eligible";
             eligibilityType = "whitelist";
@@ -273,6 +277,8 @@ export const checkWallet = createServerFn({ method: "POST" })
             image: p.image_url,
             chain: p.chain,
             source: "manual",
+            source_url: p.mint_url ?? p.website ?? p.x_url,
+            checked_at: new Date().toISOString(),
             status,
             eligibility_type: eligibilityType,
             detail,

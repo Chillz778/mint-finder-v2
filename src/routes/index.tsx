@@ -27,12 +27,15 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-const filters = ["All results", "Eligible", "Not eligible", "Needs a manual check"] as const;
+const filters = ["All results", "Positive results", "No match", "Needs a manual check"] as const;
 type Filter = (typeof filters)[number];
 
-function statusLabel(status: ResultItem["status"]) {
-  switch (status) {
+function statusLabel(item: ResultItem) {
+  switch (item.status) {
     case "eligible":
+      if (item.eligibility_type === "public") {
+        return item.source === "opensea" ? "Public stage listed" : "Owner-listed public mint";
+      }
       return "Eligible";
     case "not_eligible":
       return "Not eligible";
@@ -43,6 +46,45 @@ function statusLabel(status: ResultItem["status"]) {
     case "unknown":
       return "Could not verify";
   }
+}
+
+function sourceLabel(item: ResultItem) {
+  if (item.source === "opensea") {
+    return item.eligibility_type === "whitelist" && item.status !== "sign_in"
+      ? "OpenSea eligibility check"
+      : "OpenSea drop listing";
+  }
+  if (item.eligibility_type === "whitelist") {
+    return item.status === "sign_in" ? "Owner-managed OpenSea gate" : "Owner-managed allowlist";
+  }
+  if (item.eligibility_type === "holder") return "Owner-set holder rule · OpenSea holdings";
+  return "Owner-managed project entry";
+}
+
+function formatCheckedAt(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "time unavailable";
+  return `${new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Africa/Lagos",
+  }).format(date)} WAT`;
+}
+
+function ResultProvenance({ item }: { item: ResultItem }) {
+  return (
+    <div className="result-provenance" aria-label="Result source and check time">
+      <span>{sourceLabel(item)}</span>
+      {item.source_url ? (
+        <a href={item.source_url} target="_blank" rel="noreferrer">
+          View source <ArrowUpRight size={12} />
+        </a>
+      ) : (
+        <span>Source link unavailable</span>
+      )}
+      <span>Checked {formatCheckedAt(item.checked_at)}</span>
+    </div>
+  );
 }
 
 function chainDotClass(chain: string) {
@@ -93,8 +135,8 @@ function Index() {
       if (drop.eligibility_type === "whitelist") return false;
       const matchesFilter =
         filter === "All results" ||
-        (filter === "Eligible" && drop.status === "eligible") ||
-        (filter === "Not eligible" && drop.status === "not_eligible") ||
+        (filter === "Positive results" && drop.status === "eligible") ||
+        (filter === "No match" && drop.status === "not_eligible") ||
         (filter === "Needs a manual check" &&
           ["sign_in", "check_site", "unknown"].includes(drop.status));
       const matchesSearch =
@@ -166,6 +208,7 @@ function Index() {
                   ...item,
                   status: result.eligible ? "eligible" : "not_eligible",
                   eligibility_type: "whitelist",
+                  checked_at: new Date().toISOString(),
                   detail: result.eligible
                     ? `Whitelisted for ${result.stages.join(", ") || "an OpenSea stage"}`
                     : "OpenSea did not whitelist this wallet for an available stage",
@@ -493,7 +536,7 @@ function Index() {
                   type="button"
                   aria-pressed={filter === item}
                 >
-                  {item === "Eligible" && <Check size={14} />}
+                  {item === "Positive results" && <Check size={14} />}
                   {item}
                 </button>
               ))}
@@ -507,8 +550,8 @@ function Index() {
                   <div className="section-kicker">PRIVATE AND GATED MINTS</div>
                   <h3 id="whitelist-heading">Whitelist status</h3>
                   <p>
-                    Separate from public mints: public means anyone can mint; whitelist status is
-                    checked for each project.
+                    OpenSea gates and uploaded allowlists are identified separately. A public stage
+                    is a listing status, not a wallet-specific approval.
                   </p>
                 </div>
               </div>
@@ -536,6 +579,7 @@ function Index() {
                       </span>
                     </div>
                     <p>{item.detail}</p>
+                    <ResultProvenance item={item} />
                     <div className="whitelist-card-footer">
                       <span className="chain-pill">
                         <i className={`chain-dot ${chainDotClass(item.chain)}`} />
@@ -600,7 +644,7 @@ function Index() {
                       className={`status-tag ${drop.status === "eligible" ? "status-eligible" : drop.status === "not_eligible" ? "status-not-eligible" : "status-check"}`}
                     >
                       {drop.status === "eligible" && <Check size={12} />}
-                      {statusLabel(drop.status)}
+                      {statusLabel(drop)}
                     </span>
                     <span className="art-index">0{index + 1}</span>
                   </div>
@@ -633,6 +677,7 @@ function Index() {
                       )}
                     </div>
                     <p className="drop-description">{drop.detail}</p>
+                    <ResultProvenance item={drop} />
                     <div className="drop-card-footer">
                       <span className="chain-pill">
                         <i className={`chain-dot ${chainDotClass(drop.chain)}`} />
@@ -691,8 +736,10 @@ function Index() {
                 <CircleHelp size={15} />
               </span>
               <p>
-                <strong>Coverage note.</strong> Results include only the sources configured here.
-                Always verify allowlist and mint details on the project’s official site.
+                <strong>Coverage note.</strong> Each result names its source and check time. Public
+                stage listings do not confirm wallet-specific eligibility or guarantee a mint is
+                still open. Owner-managed entries and allowlists depend on the site owner’s data;
+                verify final details on the project’s official site.
               </p>
             </div>
           ) : null}
