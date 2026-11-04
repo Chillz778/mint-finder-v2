@@ -83,6 +83,12 @@ export type OpenSeaEligibilityStage = {
   is_eligible: boolean;
 };
 
+export type OpenSeaEligibilityResult = {
+  whitelistStages: string[];
+  publicStages: string[];
+  unknownStages: string[];
+};
+
 export function splitOpenSeaEligibleStages(stages: OpenSeaEligibilityStage[]) {
   const eligibleStages = stages.filter((stage) => stage.is_eligible);
   return {
@@ -93,6 +99,44 @@ export function splitOpenSeaEligibleStages(stages: OpenSeaEligibilityStage[]) {
       (stage) => stage.stage_type != null && stage.stage_type.toLowerCase() !== "public_sale",
     ),
     unknownStages: eligibleStages.filter((stage) => !stage.stage_type),
+  };
+}
+
+export function withOpenSeaEligibility(
+  item: ResultItem,
+  result: OpenSeaEligibilityResult,
+): ResultItem {
+  const hasWhitelistEligibility = result.whitelistStages.length > 0;
+  const hasPublicEligibility = result.publicStages.length > 0;
+  const hasUnknownPhase = result.unknownStages.length > 0;
+  const eligibilityType: EligibilityType = hasWhitelistEligibility
+    ? "whitelist"
+    : hasPublicEligibility
+      ? "public"
+      : hasUnknownPhase
+        ? "site"
+        : "whitelist";
+  const status: Status =
+    hasWhitelistEligibility || hasPublicEligibility
+      ? "eligible"
+      : hasUnknownPhase
+        ? "unknown"
+        : "not_eligible";
+  const detail = hasWhitelistEligibility
+    ? `OpenSea confirms whitelist eligibility for ${result.whitelistStages.join(", ")}.${hasPublicEligibility ? ` Also eligible for the public phase${result.publicStages.length ? ` (${result.publicStages.join(", ")})` : ""}.` : ""}`
+    : hasPublicEligibility
+      ? `OpenSea confirms eligibility for the public phase (${result.publicStages.join(", ")}) only. No whitelist eligibility was confirmed.`
+      : hasUnknownPhase
+        ? `OpenSea returned an eligible phase (${result.unknownStages.join(", ")}) without identifying its type. Check the phase directly on OpenSea; no whitelist status is claimed.`
+        : "OpenSea did not confirm eligibility for any phase. No whitelist status is claimed; check the project's official mint page for any public phase.";
+  return {
+    ...item,
+    status,
+    eligibility_type: eligibilityType,
+    eligibility_verified: true,
+    verified_stages: [...result.whitelistStages, ...result.publicStages, ...result.unknownStages],
+    checked_at: new Date().toISOString(),
+    detail,
   };
 }
 

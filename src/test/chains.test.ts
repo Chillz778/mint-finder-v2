@@ -7,6 +7,7 @@ import {
   isMintingOrUpcoming,
   normalizeWallet,
   splitOpenSeaEligibleStages,
+  withOpenSeaEligibility,
 } from "@/lib/chains";
 
 describe("supported network wallet handling", () => {
@@ -113,5 +114,36 @@ describe("supported network wallet handling", () => {
 
     expect(result.unknownStages.map((stage) => stage.label)).toEqual(["Unnamed phase"]);
     expect(result.whitelistStages).toEqual([]);
+  });
+
+  it("stores public-only OpenSea eligibility as public and never as whitelist", () => {
+    const item = {
+      key: "os:example",
+      name: "Example",
+      x_handle: null,
+      image: null,
+      chain: "ethereum",
+      source: "opensea" as const,
+      source_url: null,
+      checked_at: "2026-11-04T12:00:00.000Z",
+      status: "sign_in" as const,
+      eligibility_type: "whitelist" as const,
+      detail: "Sign in required",
+      mint_url: null,
+      start_time: null,
+      price: null,
+      opensea_slug: "example",
+    };
+
+    const result = withOpenSeaEligibility(item, {
+      whitelistStages: [],
+      publicStages: ["Public Sale"],
+      unknownStages: [],
+    });
+
+    expect(result.status).toBe("eligible");
+    expect(result.eligibility_type).toBe("public");
+    expect(result.detail).toContain("No whitelist eligibility was confirmed");
+    expect(result.eligibility_verified).toBe(true);
   });
 });

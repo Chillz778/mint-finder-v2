@@ -20,6 +20,7 @@ import {
   chainLabel,
   detectWalletKind,
   siweText,
+  withOpenSeaEligibility,
   type ResultItem,
 } from "@/lib/chains";
 
@@ -111,6 +112,7 @@ function Index() {
   const [connectedWallet, setConnectedWallet] = useState("");
   const [walletMessage, setWalletMessage] = useState("");
   const [walletError, setWalletError] = useState("");
+  const [walletDisclaimerOpen, setWalletDisclaimerOpen] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [results, setResults] = useState<ResultItem[] | null>(null);
   const [sourceWarning, setSourceWarning] = useState("");
@@ -146,35 +148,23 @@ function Index() {
     });
   }, [filter, query, results]);
 
-  async function checkOpenSeaEligibility(drop: ResultItem) {
-    if (!drop.opensea_slug) return;
+  async function checkOpenSeaEligibility(items: ResultItem[], account: string) {
+    const gatedItems = items.filter((item) => item.status === "sign_in" && item.opensea_slug);
+    const slugs = [...new Set(gatedItems.map((item) => item.opensea_slug!))].slice(0, 80);
+    if (slugs.length === 0) {
+      setWalletMessage("Connected. No OpenSea gated phases need a signature right now.");
+      return;
+    }
     const provider = (
       window as Window & {
         ethereum?: { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> };
       }
     ).ethereum;
-    if (!provider) {
-      setEligibilityMessages((current) => ({
-        ...current,
-        [drop.key]: "Install or open an Ethereum wallet extension, or use the OpenSea link.",
-      }));
-      return;
-    }
+    if (!provider) throw new Error("Open an Ethereum wallet to check OpenSea gated phases.");
 
-    setEligibilityBusy(drop.key);
-    setEligibilityMessages((current) => ({ ...current, [drop.key]: "" }));
+    setEligibilityBusy("batch");
+    setEligibilityMessages({});
     try {
-      const accounts = await provider.request({ method: "eth_requestAccounts" });
-      const account = Array.isArray(accounts) && typeof accounts[0] === "string" ? accounts[0] : "";
-      if (account) setConnectedWallet(account);
-      if (!account || account.toLowerCase() !== wallet.trim().toLowerCase()) {
-        setEligibilityMessages((current) => ({
-          ...current,
-          [drop.key]: "Connect the same wallet address you checked above, then try again.",
-        }));
-        return;
-      }
-
       const { nonce } = await openseaNonce();
       const message = buildSiweMessage(account, nonce, new Date().toISOString());
       const signature = await provider.request({
@@ -185,77 +175,96 @@ function Index() {
         throw new Error("The wallet did not return a signature.");
       }
       const response = await openseaEligibility({
-        data: { message, signature, slugs: [drop.opensea_slug] },
+        data: { message, signature, slugs },
       });
       if (response.error) {
-        const errorMessage = response.error;
-        setEligibilityMessages((current) => ({ ...current, [drop.key]: errorMessage }));
-        return;
+        throw new Error(response.error);
       }
-      const result = response.results[drop.opensea_slug];
-      if (!result) {
-        setEligibilityMessages((current) => ({
-          ...current,
-          [drop.key]: "OpenSea couldn't verify this drop right now. Try its official page.",
-        }));
-        return;
-      }
-      const hasWhitelistEligibility = result.whitelistStages.length > 0;
-      const hasPublicEligibility = result.publicStages.length > 0;
-      const hasUnknownPhase = result.unknownStages.length > 0;
-      const eligibilityType = hasWhitelistEligibility
-        ? "whitelist"
-        : hasPublicEligibility
-          ? "public"
-          : hasUnknownPhase
-            ? "site"
-            : "whitelist";
-      const status =
-        hasWhitelistEligibility || hasPublicEligibility
-          ? "eligible"
-          : hasUnknownPhase
-            ? "unknown"
-            : "not_eligible";
-      const detail = hasWhitelistEligibility
-        ? `OpenSea confirms whitelist eligibility for ${result.whitelistStages.join(", ")}.${hasPublicEligibility ? ` Also eligible for the public phase${result.publicStages.length ? ` (${result.publicStages.join(", ")})` : ""}.` : ""}`
-        : hasPublicEligibility
-          ? `OpenSea confirms eligibility for the public phase (${result.publicStages.join(", ")}) only. No whitelist eligibility was confirmed.`
-          : hasUnknownPhase
-            ? `OpenSea returned an eligible phase (${result.unknownStages.join(", ")}) without identifying its type. Check the phase directly on OpenSea; no whitelist status is claimed.`
-            : "OpenSea did not confirm eligibility for any phase. No whitelist status is claimed; check the project's official mint page for any public phase.";
-      const verifiedStages = [
-        ...result.whitelistStages,
-        ...result.publicStages,
-        ...result.unknownStages,
-      ];
-      setResults(
-        (current) =>
-          current?.map((item) =>
-            item.key === drop.key
-              ? {
-                  ...item,
-                  status,
-                  eligibility_type: eligibilityType,
-                  eligibility_verified: true,
-                  verified_stages: verifiedStages,
-                  checked_at: new Date().toISOString(),
-                  detail,
-                }
-              : item,
-          ) ?? null,
+      const updated = items.map((item) => {
+        if (!item.opensea_slug || !slugs.includes(item.opensea_slug)) return item;
+        const result = response.results[item.opensea_slug];
+        return result ? withOpenSeaEligibility(item, result) : item;
+      });
+      const missingCount = slugs.filter((slug) => !response.results[slug]).length;
+      setResults(updated);
+      setWalletMessage(
+        missingCount === 0
+          ? `OpenSea verified ${slugs.length} gated phase${slugs.length === 1 ? "" : "s"}.`
+          : `OpenSea verified ${slugs.length - missingCount} of ${slugs.length} gated phases; ${missingCount} still need a manual check.`,
       );
+      if (missingCount > 0) {
+        const missingKeys = gatedItems
+          .filter((item) => !response.results[item.opensea_slug!])
+          .map((item) => item.key);
+        setEligibilityMessages(
+          Object.fromEntries(
+            missingKeys.map((key) => [
+              key,
+              "OpenSea couldn't verify this phase. Check the project site.",
+            ]),
+          ),
+        );
+      }
     } catch (error) {
       const walletError = error as { code?: number };
-      setEligibilityMessages((current) => ({
-        ...current,
-        [drop.key]:
-          walletError.code === 4001
-            ? "Signature cancelled. No transaction was sent."
-            : error instanceof Error
-              ? error.message
-              : "OpenSea eligibility check failed. Try the OpenSea link.",
-      }));
+      const messageText =
+        walletError.code === 4001
+          ? "OpenSea message signature cancelled. Gated statuses remain unverified; no transaction was sent."
+          : error instanceof Error
+            ? `${error.message} Gated statuses remain unverified.`
+            : "OpenSea eligibility check failed. Gated statuses remain unverified.";
+      setEligibilityMessages(Object.fromEntries(gatedItems.map((item) => [item.key, messageText])));
+      setWalletMessage(messageText);
     } finally {
+      setEligibilityBusy("");
+    }
+  }
+
+  async function connectWalletAndCheck() {
+    setWalletDisclaimerOpen(false);
+    setWalletError("");
+    setWalletMessage("");
+    const provider = (
+      window as Window & {
+        ethereum?: { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> };
+      }
+    ).ethereum;
+    if (!provider) {
+      setWalletError(
+        "No Ethereum wallet was found. Open this page in a browser with your wallet extension.",
+      );
+      return;
+    }
+
+    setEligibilityBusy("connect");
+    try {
+      const accounts = await provider.request({ method: "eth_requestAccounts" });
+      const account = Array.isArray(accounts) && typeof accounts[0] === "string" ? accounts[0] : "";
+      if (!account || detectWalletKind(account) !== "evm") {
+        throw new Error("The wallet did not return a supported Ethereum address.");
+      }
+      setConnectedWallet(account);
+      setWallet(account);
+      setIsChecking(true);
+      const response = await checkWallet({ data: { address: account } });
+      if (response.error) throw new Error(response.error);
+      setResults(response.items);
+      setSourceWarning(response.sourceWarning ?? "");
+      setFilter("All results");
+      setWalletMessage(
+        `Connected ${account.slice(0, 6)}…${account.slice(-4)}. Checking configured project rules.`,
+      );
+      await checkOpenSeaEligibility(response.items, account);
+    } catch (error) {
+      const walletError = error as { code?: number };
+      setWalletMessage(
+        walletError.code === 4001 ? "Wallet connection cancelled. No transaction was sent." : "",
+      );
+      if (walletError.code !== 4001) {
+        setWalletError(error instanceof Error ? error.message : "Wallet connection failed.");
+      }
+    } finally {
+      setIsChecking(false);
       setEligibilityBusy("");
     }
   }
@@ -315,9 +324,13 @@ function Index() {
       }
       setResults(response.items);
       setSourceWarning(response.sourceWarning ?? "");
-      setWalletMessage(
-        `Checked ${wallet.trim().slice(0, 6)}…${wallet.trim().slice(-4)}. Your address was not stored.`,
-      );
+      if (connectedWallet && connectedWallet.toLowerCase() === wallet.trim().toLowerCase()) {
+        await checkOpenSeaEligibility(response.items, connectedWallet);
+      } else {
+        setWalletMessage(
+          `Checked ${wallet.trim().slice(0, 6)}…${wallet.trim().slice(-4)}. Your address was not stored.`,
+        );
+      }
     } catch (error) {
       console.error("Wallet eligibility check failed", error);
       setWalletError(
@@ -462,6 +475,81 @@ function Index() {
         </div>
       )}
 
+      {walletDisclaimerOpen && (
+        <div
+          className="wallet-disclaimer-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && eligibilityBusy === "") {
+              setWalletDisclaimerOpen(false);
+            }
+          }}
+        >
+          <section
+            aria-labelledby="wallet-disclaimer-title"
+            aria-modal="true"
+            className="wallet-disclaimer-dialog"
+            role="dialog"
+          >
+            <button
+              aria-label="Close wallet information"
+              className="admin-gate-close"
+              disabled={eligibilityBusy !== ""}
+              onClick={() => setWalletDisclaimerOpen(false)}
+              type="button"
+            >
+              ×
+            </button>
+            <div className="section-kicker">READ THIS BEFORE CONTINUING</div>
+            <h2 id="wallet-disclaimer-title">What connecting your wallet does</h2>
+            <div className="wallet-disclaimer-alert">
+              <strong>A wallet warning is not a guarantee of safety.</strong> Your wallet may flag
+              this site or the sign-in request. Do not dismiss warnings automatically. Continue only
+              if the wallet shows the OpenSea sign-in message described below; cancel anything that
+              asks for a transaction, token approval, or anything unexpected.
+            </div>
+            <ul className="wallet-disclaimer-points">
+              <li>
+                <strong>Connect:</strong> shares your public address with Mint Finder so it can
+                check configured project rules. It does not give the site your private key or move
+                funds.
+              </li>
+              <li>
+                <strong>Gated phase check:</strong> OpenSea requires a separate message signature.
+                The prompt should say <strong>opensea.io</strong> and sign you in to OpenSea. It
+                includes OpenSea’s Terms and Privacy Policy. This signature is not a blockchain
+                transaction and has no gas fee.
+              </li>
+              <li>
+                <strong>Eligibility results:</strong> after that signature, Mint Finder requests
+                OpenSea’s read-only eligibility data for the listed gated drops. The temporary
+                eligibility token is revoked after the check. If you cancel or OpenSea cannot verify
+                a phase, that status remains unverified.
+              </li>
+              <li>
+                <strong>Never share</strong> your recovery phrase or private key. Mint Finder will
+                never ask for either.
+              </li>
+            </ul>
+            <p className="wallet-disclaimer-final">
+              Connecting is optional. Read the actual wallet prompt carefully and continue only if
+              it matches what is explained here.
+            </p>
+            <div className="wallet-disclaimer-actions">
+              <button type="button" onClick={() => setWalletDisclaimerOpen(false)}>
+                Cancel
+              </button>
+              <button
+                disabled={eligibilityBusy !== ""}
+                onClick={() => void connectWalletAndCheck()}
+                type="button"
+              >
+                {eligibilityBusy ? "Waiting for wallet…" : "Connect & check gated phases"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
       <main id="top">
         <section className="hero-section">
           <div className="hero-copy">
@@ -507,9 +595,18 @@ function Index() {
                 id="wallet-address"
                 autoComplete="off"
                 spellCheck={false}
+                disabled={eligibilityBusy !== "" || isChecking}
                 value={wallet}
                 onChange={(event) => {
-                  setWallet(event.target.value);
+                  const nextWallet = event.target.value;
+                  setWallet(nextWallet);
+                  if (
+                    connectedWallet &&
+                    connectedWallet.toLowerCase() !== nextWallet.toLowerCase()
+                  ) {
+                    setConnectedWallet("");
+                    setResults(null);
+                  }
                   setWalletMessage("");
                   setWalletError("");
                 }}
@@ -520,23 +617,31 @@ function Index() {
                 {!isChecking && <ArrowRight size={16} />}
               </button>
             </form>
-            {connectedWallet && (
-              <div className="wallet-connected" role="status">
-                <span>
-                  Connected {connectedWallet.slice(0, 6)}…{connectedWallet.slice(-4)}
-                </span>
-                <button type="button" onClick={() => void disconnectWallet()}>
-                  Disconnect wallet
+            <div className="wallet-connect-row">
+              {connectedWallet ? (
+                <>
+                  <span className="wallet-connected-address" role="status">
+                    Connected {connectedWallet.slice(0, 6)}…{connectedWallet.slice(-4)}
+                  </span>
+                  <button
+                    className="wallet-connect-button wallet-disconnect-button"
+                    disabled={eligibilityBusy !== ""}
+                    onClick={() => void disconnectWallet()}
+                    type="button"
+                  >
+                    Disconnect wallet
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="wallet-connect-button"
+                  onClick={() => setWalletDisclaimerOpen(true)}
+                  type="button"
+                >
+                  Connect wallet
                 </button>
-              </div>
-            )}
-            <p className="wallet-safety-note">
-              Connecting shares your public address with this site; it does not authorize a
-              transaction. OpenSea eligibility checks request a message signature, not a
-              transaction. Never share your recovery phrase or private key. A wallet warning is not
-              something to dismiss; verify the site and message, and cancel if anything is
-              unexpected.
-            </p>
+              )}
+            </div>
             <div className="supported-chains">
               <span>NETWORKS</span>
               {CHAIN_OPTIONS.map((chain) => (
@@ -629,6 +734,35 @@ function Index() {
                   </p>
                 </div>
               </div>
+              {whitelistItems.some((item) => item.status === "sign_in" && item.opensea_slug) && (
+                <div className="eligibility-batch" role="status">
+                  <div>
+                    <strong>
+                      {connectedWallet
+                        ? "Wallet connected"
+                        : "OpenSea gated phases need verification"}
+                    </strong>
+                    <p>
+                      {connectedWallet
+                        ? "A signed OpenSea message checks the gated phases in one read-only request."
+                        : "Connect your wallet to check gated phases. A separate OpenSea message signature is required."}
+                    </p>
+                  </div>
+                  {connectedWallet ? (
+                    <button
+                      disabled={eligibilityBusy !== ""}
+                      onClick={() => void checkOpenSeaEligibility(results ?? [], connectedWallet)}
+                      type="button"
+                    >
+                      {eligibilityBusy === "batch" ? "Checking phases…" : "Check gated phases"}
+                    </button>
+                  ) : (
+                    <button onClick={() => setWalletDisclaimerOpen(true)} type="button">
+                      Connect wallet
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="whitelist-grid">
                 {whitelistItems.map((item) => (
                   <article className="whitelist-card" key={item.key}>
@@ -667,31 +801,11 @@ function Index() {
                     </div>
                     {item.status === "sign_in" && (
                       <div className="eligibility-action">
-                        {detectWalletKind(wallet) === "evm" && item.opensea_slug ? (
-                          <button
-                            type="button"
-                            disabled={eligibilityBusy !== ""}
-                            onClick={() => void checkOpenSeaEligibility(item)}
-                          >
-                            {eligibilityBusy === item.key
-                              ? "Waiting for wallet…"
-                              : "Sign in with wallet to check"}
-                          </button>
-                        ) : (
-                          <span>Use the project’s official page to check eligibility.</span>
-                        )}
-                        <p>
-                          Message signature only; no blockchain transaction. The connected wallet
-                          must match. The message also says you accept OpenSea’s{" "}
-                          <a href="https://opensea.io/tos" target="_blank" rel="noreferrer">
-                            Terms
-                          </a>{" "}
-                          and{" "}
-                          <a href="https://opensea.io/privacy" target="_blank" rel="noreferrer">
-                            Privacy Policy
-                          </a>
-                          . Review the message before signing.
-                        </p>
+                        <span>
+                          {connectedWallet
+                            ? "OpenSea could not confirm this phase yet. Use Check gated phases to retry."
+                            : "Connect your wallet to check this OpenSea-gated phase."}
+                        </span>
                         {eligibilityMessages[item.key] && (
                           <p className="eligibility-message" role="status">
                             {eligibilityMessages[item.key]}

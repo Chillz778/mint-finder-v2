@@ -277,6 +277,108 @@
   background: rgba(15, 27, 19, 0.46);
 }
 
+.wallet-disclaimer-backdrop {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 27, 19, 0.7);
+  backdrop-filter: blur(4px);
+}
+
+.wallet-disclaimer-dialog {
+  position: relative;
+  width: min(100%, 680px);
+  max-height: min(90vh, 820px);
+  overflow-y: auto;
+  padding: 34px;
+  border: 1px solid #dfe7d9;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 28px 90px rgba(9, 22, 13, 0.32);
+}
+
+.wallet-disclaimer-dialog h2 {
+  margin: 12px 42px 18px 0;
+  color: #203d2c;
+  font-size: clamp(26px, 4vw, 34px);
+  font-weight: 750;
+  letter-spacing: -0.9px;
+  line-height: 1.12;
+}
+
+.wallet-disclaimer-alert {
+  padding: 18px 20px;
+  border: 2px solid #c96848;
+  border-radius: 12px;
+  background: #fff5ef;
+  color: #632d20;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.55;
+}
+
+.wallet-disclaimer-alert strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 19px;
+  font-weight: 800;
+}
+
+.wallet-disclaimer-points {
+  display: grid;
+  gap: 12px;
+  margin: 20px 0;
+  padding-left: 22px;
+  color: #35463b;
+  font-size: 15px;
+  line-height: 1.58;
+}
+
+.wallet-disclaimer-points strong {
+  color: #203d2c;
+  font-weight: 800;
+}
+
+.wallet-disclaimer-final {
+  margin: 18px 0;
+  color: #35463b;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.wallet-disclaimer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.wallet-disclaimer-actions button {
+  min-height: 46px;
+  padding: 0 16px;
+  border: 1px solid #dbe4d6;
+  border-radius: 9px;
+  background: #f7f9f5;
+  color: #304337;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.wallet-disclaimer-actions button:last-child {
+  border-color: #203d2c;
+  background: #203d2c;
+  color: #fff;
+}
+
+.wallet-disclaimer-actions button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .admin-gate-dialog {
   position: relative;
   width: min(100%, 420px);
@@ -1053,31 +1155,40 @@
   line-height: 1.45;
 }
 
-.wallet-connected {
+.wallet-connect-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-top: 10px;
-  color: #52714f;
-  font-size: 10px;
 }
 
-.wallet-connected button {
-  padding: 5px 8px;
-  border: 1px solid #dce8d6;
-  border-radius: 6px;
-  background: #f5f9f1;
-  color: #426345;
-  font-size: 9px;
+.wallet-connected-address {
+  color: #52714f;
+  font-size: 11px;
   font-weight: 650;
 }
 
-.wallet-safety-note {
-  margin: 12px 0 0;
-  color: #7d8981;
-  font-size: 9px;
-  line-height: 1.55;
+.wallet-connect-button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid #cbdcc3;
+  border-radius: 8px;
+  background: #edf5e9;
+  color: #2f5538;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.wallet-connect-button:hover {
+  background: #e1efd9;
+}
+
+.wallet-disconnect-button {
+  border-color: #e5e5df;
+  background: #f7f7f4;
+  color: #626c64;
 }
 
 .result-provenance a {
@@ -1093,6 +1204,48 @@
   justify-items: start;
   gap: 5px;
   margin: -4px 0 12px;
+}
+
+.eligibility-batch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 18px 0;
+  padding: 16px 18px;
+  border: 1px solid #dfe8d8;
+  border-radius: 11px;
+  background: #f8fbf5;
+  color: #304337;
+}
+
+.eligibility-batch strong {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.eligibility-batch p {
+  margin: 5px 0 0;
+  color: #6f7d72;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.eligibility-batch button {
+  min-height: 40px;
+  flex: 0 0 auto;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: #203d2c;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.eligibility-batch button:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .eligibility-action button {
@@ -1608,6 +1761,38 @@
   .footer-note {
     width: 100%;
     text-align: left;
+  }
+
+  .wallet-disclaimer-dialog {
+    padding: 24px 20px;
+  }
+
+  .wallet-disclaimer-alert {
+    padding: 14px;
+    font-size: 14px;
+  }
+
+  .wallet-disclaimer-alert strong {
+    font-size: 17px;
+  }
+
+  .wallet-disclaimer-points,
+  .wallet-disclaimer-final {
+    font-size: 13px;
+  }
+
+  .wallet-disclaimer-actions {
+    flex-direction: column-reverse;
+  }
+
+  .wallet-disclaimer-actions button,
+  .eligibility-batch button {
+    width: 100%;
+  }
+
+  .eligibility-batch {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 
