@@ -11,6 +11,7 @@ import {
   isMintingOrUpcoming,
   normalizeWallet,
   parseXHandle,
+  readDropSupply,
   splitOpenSeaEligibleStages,
   type ResultItem,
 } from "./chains";
@@ -32,9 +33,17 @@ type OpenSeaDrop = {
   image_url: string | null;
   opensea_url: string | null;
   is_minting: boolean;
+  total_supply: string | null;
+  max_supply: string | null;
   active_stage: OpenSeaStage | null;
   next_stage: OpenSeaStage | null;
 };
+
+const OPEN_SEA_DROP_TYPES = ["featured", "upcoming", "recently_minted"] as const;
+const MAX_OPEN_SEA_DROP_PAGES = 5;
+const MAX_OPEN_SEA_DROPS = 80;
+const OPEN_SEA_PAGE_SIZE = 100;
+const OPEN_SEA_COLLECTION_BATCH_SIZE = 50;
 
 function asObject(value: unknown): JsonObject | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -77,6 +86,8 @@ function parseDrop(value: unknown): OpenSeaDrop | null {
     image_url: stringField(drop, "image_url"),
     opensea_url: stringField(drop, "opensea_url"),
     is_minting: drop["is_minting"] === true,
+    total_supply: stringField(drop, "total_supply"),
+    max_supply: stringField(drop, "max_supply"),
     active_stage: parseStage(drop["active_stage"]),
     next_stage: parseStage(drop["next_stage"]),
   };
@@ -124,6 +135,26 @@ async function osGet(path: string, extra: Record<string, string> = {}): Promise<
   return asObject(await res.json());
 }
 
+async function osPost(path: string, body: JsonObject): Promise<JsonObject | null> {
+  const key = process.env["OPENSEA_API_KEY"];
+  if (!key) throw new Error("OpenSea key missing");
+  const res = await fetch(OS + path, {
+    method: "POST",
+    headers: {
+      "X-API-KEY": key,
+      accept: "application/json",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const responseBody = await res.text();
+    console.error(`OpenSea ${path} [${res.status}]: ${responseBody.slice(0, 300)}`);
+    return null;
+  }
+  return asObject(await res.json());
+}
+
 function weiToEth(wei: string | null | undefined) {
   if (wei == null) return null;
   try {
@@ -134,77 +165,218 @@ function weiToEth(wei: string | null | undefined) {
   }
 }
 
-async function loadDrops(chains: string[]): Promise<ResultItem[]> {
-  const chainFilter = encodeURIComponent(chains.join(","));
-  const lists = await Promise.all(
-    ["featured", "upcoming", "recently_minted"].map((type) =>
-      osGet(`/api/v2/drops?type=${type}&limit=100&chains=${chainFilter}`),
-    ),
-  );
-  if (lists.every((list) => list == null)) {
-    throw new Error("OpenSea drop listings are unavailable");
+type DropListScan = {
+  type: (typeof OPEN_SEA_DROP_TYPES)[number];
+  drops: Map<string, OpenSeaDrop>;
+  cursor: string | null;
+  pages: number;
+  hadResponse: boolean;
+  failed: boolean;
+};
+
+async function scanDropPage(scan: DropListScan, chains: string[]) {
+  const params = new URLSearchParams({
+    type: scan.type,
+    limit: String(OPEN_SEA_PAGE_SIZE),
+    chains: chains.join(","),
+  });
+  if (scan.cursor) params.set("cursor", scan.cursor);
+
+  let page: JsonObject | null = null;
+  try {
+    page = await osGet(`/api/v2/drops?${params.toString()}`);
+  } catch (error) {
+    console.error(`OpenSea ${scan.type} drops request failed`, error);
   }
-  const seen = new Map<string, OpenSeaDrop>();
-  for (const l of lists) {
-    for (const rawDrop of asObjects(l?.["drops"])) {
-      const drop = parseDrop(rawDrop);
-      const key = drop ? collectionIdentityKey(drop.chain, drop.collection_slug) : "";
-      if (drop && chains.includes(drop.chain) && !seen.has(key)) {
-        seen.set(key, drop);
-      }
+  scan.pages += 1;
+  if (!page) {
+    scan.failed = true;
+    scan.cursor = null;
+    return;
+  }
+
+  scan.hadResponse = true;
+  for (const rawDrop of asObjects(page["drops"])) {
+    const drop = parseDrop(rawDrop);
+    const key = drop ? collectionIdentityKey(drop.chain, drop.collection_slug) : "";
+    if (
+      drop &&
+      chains.includes(drop.chain) &&
+      isMintingOrUpcoming(drop.is_minting, drop.next_stage?.start_time ?? null) &&
+      !scan.drops.has(key)
+    ) {
+      scan.drops.set(key, drop);
     }
   }
-  const drops = [...seen.values()]
-    .filter((drop) => isMintingOrUpcoming(drop.is_minting, drop.next_stage?.start_time ?? null))
-    .slice(0, 100);
-  const handles: Array<{ x: string | null; site: string | null }> = [];
-  for (let offset = 0; offset < drops.length; offset += 10) {
-    const batch = await Promise.all(
-      drops.slice(offset, offset + 10).map(async (drop) => {
-        const collection = await osGet(
-          `/api/v2/collections/${encodeURIComponent(drop.collection_slug)}`,
-        );
-        return {
-          x: collection ? stringField(collection, "twitter_username") : null,
-          site: collection ? stringField(collection, "project_url") : null,
-        };
-      }),
-    );
-    handles.push(...batch);
+  scan.cursor = stringField(page, "next");
+}
+
+function formatSupply(value: bigint) {
+  return value.toLocaleString("en-US");
+}
+
+async function loadDropDetails(drop: OpenSeaDrop): Promise<OpenSeaDrop | null> {
+  try {
+    const details = await osGet(`/api/v2/drops/${encodeURIComponent(drop.collection_slug)}`);
+    return details ? parseDrop(details) : null;
+  } catch (error) {
+    console.error(`OpenSea drop details failed for ${drop.collection_slug}`, error);
+    return null;
   }
+}
+
+async function loadCollectionMetadata(drops: OpenSeaDrop[]) {
+  const metadata = new Map<string, { x: string | null; site: string | null }>();
+  for (let offset = 0; offset < drops.length; offset += OPEN_SEA_COLLECTION_BATCH_SIZE) {
+    const batch = drops.slice(offset, offset + OPEN_SEA_COLLECTION_BATCH_SIZE);
+    try {
+      const response = await osPost("/api/v2/collections/batch", {
+        slugs: batch.map((drop) => drop.collection_slug),
+      });
+      for (const collection of asObjects(response?.["collections"])) {
+        const slug = stringField(collection, "collection");
+        if (slug) {
+          metadata.set(slug.toLowerCase(), {
+            x: stringField(collection, "twitter_username"),
+            site: stringField(collection, "project_url"),
+          });
+        }
+      }
+    } catch (error) {
+      console.error("OpenSea collection metadata request failed", error);
+    }
+  }
+  return metadata;
+}
+
+async function loadDrops(chains: string[]): Promise<{
+  items: ResultItem[];
+  warning: string | null;
+}> {
+  const scans: DropListScan[] = OPEN_SEA_DROP_TYPES.map((type) => ({
+    type,
+    drops: new Map(),
+    cursor: null,
+    pages: 0,
+    hadResponse: false,
+    failed: false,
+  }));
+  await Promise.all(scans.map((scan) => scanDropPage(scan, chains)));
+
+  if (scans.every((scan) => !scan.hadResponse)) {
+    throw new Error("OpenSea drop listings are unavailable");
+  }
+
+  const selectCandidates = () => {
+    const candidates = new Map<string, OpenSeaDrop>();
+    const orderedDrops = scans.map((scan) => [...scan.drops.entries()]);
+    for (let index = 0; candidates.size < MAX_OPEN_SEA_DROPS; index += 1) {
+      let foundAtIndex = false;
+      for (const entries of orderedDrops) {
+        const entry = entries[index];
+        if (!entry) continue;
+        foundAtIndex = true;
+        if (!candidates.has(entry[0])) candidates.set(entry[0], entry[1]);
+        if (candidates.size >= MAX_OPEN_SEA_DROPS) break;
+      }
+      if (!foundAtIndex) break;
+    }
+    return candidates;
+  };
+  while (
+    selectCandidates().size < MAX_OPEN_SEA_DROPS &&
+    scans.some((scan) => scan.cursor && scan.pages < MAX_OPEN_SEA_DROP_PAGES)
+  ) {
+    const remainingScans = scans.filter(
+      (scan) => scan.cursor && scan.pages < MAX_OPEN_SEA_DROP_PAGES,
+    );
+    await Promise.all(remainingScans.map((scan) => scanDropPage(scan, chains)));
+  }
+
+  const candidates = selectCandidates();
+  const summaries = [...candidates.values()];
+  const details: OpenSeaDrop[] = [];
+  for (let offset = 0; offset < summaries.length; offset += 10) {
+    const batch = await Promise.all(summaries.slice(offset, offset + 10).map(loadDropDetails));
+    for (const [index, detail] of batch.entries()) {
+      const summary = summaries[offset + index];
+      if (summary) details.push(detail ?? summary);
+    }
+  }
+
+  const collectionMetadata = await loadCollectionMetadata(details);
   const checkedAt = new Date().toISOString();
-  return dedupeCollections(
-    drops.map((d, i) => {
-      const stage = d.is_minting ? d.active_stage : d.next_stage;
-      const handle = handles[i];
-      const isPublic = stage?.stage_type === "public_sale";
-      const status = isPublic ? "eligible" : stage ? "sign_in" : "check_site";
-      return {
-        key: `os:${d.collection_slug}`,
-        name: d.collection_name,
-        x_handle: handle?.x ?? null,
-        image: d.image_url ?? null,
-        chain: d.chain,
-        source: "opensea",
-        source_url: `https://opensea.io/collection/${encodeURIComponent(d.collection_slug)}`,
-        checked_at: checkedAt,
-        status,
-        eligibility_type: isPublic ? "public" : stage ? "whitelist" : "site",
-        detail:
-          status === "eligible"
-            ? `${stage?.label ?? "Public stage"} — OpenSea lists this as open to every wallet; it is not a wallet-specific eligibility check`
-            : status === "sign_in"
-              ? `${stage?.label ?? "Restricted stage"} — sign in with OpenSea to check eligibility`
-              : d.is_minting
-                ? "Minting is live — check the official page for details"
-                : "No active or upcoming stage listed — check the project site",
-        mint_url: d.opensea_url ?? handle?.site ?? null,
-        start_time: stage?.start_time ?? null,
-        price: weiToEth(stage?.price),
-        opensea_slug: d.collection_slug,
-      } satisfies ResultItem;
+  const items = dedupeCollections(
+    details.flatMap((drop) => {
+      const supply = readDropSupply(drop.total_supply, drop.max_supply);
+      if (supply.status === "sold_out") return [];
+
+      const stage = drop.is_minting ? drop.active_stage : drop.next_stage;
+      if (!isMintingOrUpcoming(drop.is_minting, drop.next_stage?.start_time ?? null)) return [];
+
+      const metadata = collectionMetadata.get(drop.collection_slug.toLowerCase());
+      const isPublic = stage?.stage_type?.toLowerCase() === "public_sale";
+      const hasStage = stage != null;
+      const supplyVerified = supply.status === "available";
+      const status: ResultItem["status"] = !hasStage
+        ? "check_site"
+        : !supplyVerified && isPublic
+          ? "unknown"
+          : isPublic
+            ? "eligible"
+            : "sign_in";
+      const eligibilityType: ResultItem["eligibility_type"] = isPublic
+        ? "public"
+        : hasStage
+          ? "whitelist"
+          : "site";
+      const stageName = stage?.label ?? (isPublic ? "Public stage" : "Restricted stage");
+      let detail = "No active or upcoming stage was confirmed by OpenSea. Check the project site.";
+      if (hasStage && !supplyVerified) {
+        detail = `${stageName} appears in OpenSea's drop data, but Mint Finder couldn't confirm supply. Check OpenSea before relying on availability${isPublic ? "; this public stage is listed as open to every wallet, not as a wallet-specific check" : "."}`;
+      } else if (hasStage && isPublic && supply.status === "available") {
+        detail = `${stageName} — OpenSea lists this as open to every wallet, not as a wallet-specific eligibility check. OpenSea reports ${formatSupply(BigInt(supply.remaining!))} of ${formatSupply(BigInt(supply.max!))} items remaining.`;
+      } else if (hasStage && supply.status === "available") {
+        detail = `${stageName} is listed by OpenSea. OpenSea reports ${formatSupply(BigInt(supply.remaining!))} of ${formatSupply(BigInt(supply.max!))} items remaining. Sign in with OpenSea to check wallet eligibility for this phase.`;
+      }
+
+      return [
+        {
+          key: `os:${drop.collection_slug}`,
+          name: drop.collection_name,
+          x_handle: metadata?.x ?? null,
+          image: drop.image_url,
+          chain: drop.chain,
+          source: "opensea",
+          source_url: `https://opensea.io/collection/${encodeURIComponent(drop.collection_slug)}`,
+          checked_at: checkedAt,
+          status,
+          eligibility_type: eligibilityType,
+          eligibility_verified: false,
+          supply_verified: supplyVerified,
+          detail,
+          mint_url: drop.opensea_url ?? metadata?.site ?? null,
+          start_time: stage?.start_time ?? null,
+          price: weiToEth(stage?.price),
+          opensea_slug: drop.collection_slug,
+        } satisfies ResultItem,
+      ];
     }),
   );
+
+  const failedTypes = scans.filter((scan) => !scan.hadResponse || scan.failed).length;
+  const hitPageLimit = scans.some(
+    (scan) => scan.cursor != null && scan.pages >= MAX_OPEN_SEA_DROP_PAGES,
+  );
+  const stoppedAtResultLimit =
+    candidates.size >= MAX_OPEN_SEA_DROPS && scans.some((scan) => scan.cursor != null);
+  const warning =
+    failedTypes > 0 || hitPageLimit
+      ? "OpenSea returned a partial drop listing. Some projects may be missing; verify the latest stage and availability on OpenSea."
+      : stoppedAtResultLimit
+        ? "OpenSea has more matching drops than this check displays. Some projects may be missing; verify the latest listings on OpenSea."
+        : null;
+  return { items, warning };
 }
 
 export const checkWallet = createServerFn({ method: "POST" })
@@ -298,7 +470,9 @@ export const checkWallet = createServerFn({ method: "POST" })
     let drops: ResultItem[] = [];
     let sourceWarning: string | null = null;
     try {
-      drops = await loadDrops(supportedChains);
+      const dropLookup = await loadDrops(supportedChains);
+      drops = dropLookup.items;
+      sourceWarning = dropLookup.warning;
     } catch (error) {
       console.error("OpenSea drop lookup failed", error);
       sourceWarning =

@@ -113,6 +113,7 @@ function Index() {
   const [walletMessage, setWalletMessage] = useState("");
   const [walletError, setWalletError] = useState("");
   const [walletDisclaimerOpen, setWalletDisclaimerOpen] = useState(false);
+  const [walletSiteHost, setWalletSiteHost] = useState("");
   const [isChecking, setIsChecking] = useState(false);
   const [results, setResults] = useState<ResultItem[] | null>(null);
   const [sourceWarning, setSourceWarning] = useState("");
@@ -123,6 +124,11 @@ function Index() {
   const [adminBusy, setAdminBusy] = useState(false);
   const [eligibilityBusy, setEligibilityBusy] = useState("");
   const [eligibilityMessages, setEligibilityMessages] = useState<Record<string, string>>({});
+
+  function showWalletDisclaimer() {
+    setWalletSiteHost(window.location.host);
+    setWalletDisclaimerOpen(true);
+  }
 
   const whitelistItems = useMemo(() => {
     const searchTerm = query.trim().toLowerCase();
@@ -150,7 +156,8 @@ function Index() {
 
   async function checkOpenSeaEligibility(items: ResultItem[], account: string) {
     const gatedItems = items.filter((item) => item.status === "sign_in" && item.opensea_slug);
-    const slugs = [...new Set(gatedItems.map((item) => item.opensea_slug!))].slice(0, 80);
+    const allSlugs = [...new Set(gatedItems.map((item) => item.opensea_slug!))];
+    const slugs = allSlugs.slice(0, 80);
     if (slugs.length === 0) {
       setWalletMessage("Connected. No OpenSea gated phases need a signature right now.");
       return;
@@ -185,22 +192,28 @@ function Index() {
         const result = response.results[item.opensea_slug];
         return result ? withOpenSeaEligibility(item, result) : item;
       });
-      const missingCount = slugs.filter((slug) => !response.results[slug]).length;
+      const missingSlugs = slugs.filter((slug) => !response.results[slug]);
+      const omittedSlugs = allSlugs.slice(slugs.length);
+      const remainingCount = missingSlugs.length + omittedSlugs.length;
       setResults(updated);
       setWalletMessage(
-        missingCount === 0
+        remainingCount === 0
           ? `OpenSea verified ${slugs.length} gated phase${slugs.length === 1 ? "" : "s"}.`
-          : `OpenSea verified ${slugs.length - missingCount} of ${slugs.length} gated phases; ${missingCount} still need a manual check.`,
+          : `OpenSea verified ${slugs.length - missingSlugs.length} of ${allSlugs.length} gated phases; ${remainingCount} still need a manual check.`,
       );
-      if (missingCount > 0) {
-        const missingKeys = gatedItems
-          .filter((item) => !response.results[item.opensea_slug!])
+      if (remainingCount > 0) {
+        const manualCheckKeys = gatedItems
+          .filter(
+            (item) =>
+              missingSlugs.includes(item.opensea_slug!) ||
+              omittedSlugs.includes(item.opensea_slug!),
+          )
           .map((item) => item.key);
         setEligibilityMessages(
           Object.fromEntries(
-            missingKeys.map((key) => [
+            manualCheckKeys.map((key) => [
               key,
-              "OpenSea couldn't verify this phase. Check the project site.",
+              "This phase was not verified by OpenSea. Check the project page directly; do not treat it as eligible.",
             ]),
           ),
         );
@@ -400,9 +413,7 @@ function Index() {
           <button
             className="header-wallet-button"
             disabled={eligibilityBusy !== ""}
-            onClick={() =>
-              connectedWallet ? void disconnectWallet() : setWalletDisclaimerOpen(true)
-            }
+            onClick={() => (connectedWallet ? void disconnectWallet() : showWalletDisclaimer())}
             type="button"
           >
             {connectedWallet ? "Disconnect wallet" : "Connect wallet"}
@@ -519,6 +530,12 @@ function Index() {
               if the wallet shows the OpenSea sign-in message described below; cancel anything that
               asks for a transaction, token approval, or anything unexpected.
             </div>
+            <p className="wallet-origin-check">
+              <strong>Current page host:</strong> <code>{walletSiteHost}</code>. Compare this exact
+              address with Mint Finder’s link from a source you trust before connecting, and stop if
+              they do not match. The wallet sign-in prompt should separately identify{" "}
+              <code>opensea.io</code>.
+            </p>
             <ul className="wallet-disclaimer-points">
               <li>
                 <strong>Connect:</strong> shares your public address with Mint Finder so it can
@@ -528,8 +545,9 @@ function Index() {
               <li>
                 <strong>Gated phase check:</strong> OpenSea requires a separate message signature.
                 The prompt should say <strong>opensea.io</strong> and sign you in to OpenSea. It
-                includes OpenSea’s Terms and Privacy Policy. This signature is not a blockchain
-                transaction and has no gas fee.
+                includes OpenSea’s Terms and Privacy Policy. Your address and signature are sent to
+                OpenSea for that check. This signature is not a blockchain transaction and has no
+                gas fee.
               </li>
               <li>
                 <strong>Eligibility results:</strong> after that signature, Mint Finder requests
@@ -933,8 +951,12 @@ function Index() {
               <p>
                 <strong>Coverage note.</strong> Each result names its source and check time. Public
                 stage listings do not confirm wallet-specific eligibility or guarantee a mint is
-                still open. Owner-managed entries and allowlists depend on the site owner’s data;
-                verify final details on the project’s official site.
+                still open. OpenSea discovery scans its featured, upcoming, and recently minted
+                lists, up to 80 results per check; it is not a complete catalog. Exhausted drops
+                with confirmed supply are omitted. If supply, eligibility, or a listing page could
+                not be verified, the result says so. Owner-managed entries and allowlists depend on
+                the site owner’s data. Recheck phase and availability on the project’s official site
+                immediately before minting.
               </p>
             </div>
           ) : null}

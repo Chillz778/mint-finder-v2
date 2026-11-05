@@ -6,6 +6,7 @@ import {
   detectWalletKind,
   isMintingOrUpcoming,
   normalizeWallet,
+  readDropSupply,
   splitOpenSeaEligibleStages,
   withOpenSeaEligibility,
 } from "@/lib/chains";
@@ -84,6 +85,22 @@ describe("supported network wallet handling", () => {
     expect(isMintingOrUpcoming(false, "2026-11-05T12:00:00.000Z", now)).toBe(true);
     expect(isMintingOrUpcoming(false, "2026-11-03T12:00:00.000Z", now)).toBe(false);
     expect(isMintingOrUpcoming(false, null, now)).toBe(false);
+  });
+
+  it("only calls a drop sold out when OpenSea reports valid total and maximum supply", () => {
+    expect(readDropSupply("10", "10")).toEqual({
+      status: "sold_out",
+      remaining: "0",
+      max: "10",
+    });
+    expect(readDropSupply("7", "10")).toEqual({
+      status: "available",
+      remaining: "3",
+      max: "10",
+    });
+    expect(readDropSupply("10", null).status).toBe("unknown");
+    expect(readDropSupply("not-a-number", "10").status).toBe("unknown");
+    expect(readDropSupply("0", "0").status).toBe("unknown");
   });
 
   it("does not treat public-phase eligibility as whitelist eligibility", () => {

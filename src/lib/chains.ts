@@ -35,6 +35,25 @@ export function isMintingOrUpcoming(
   return isMinting || (nextStartTime != null && Date.parse(nextStartTime) > now);
 }
 
+export function readDropSupply(totalSupply: string | null, maxSupply: string | null) {
+  if (!totalSupply || !maxSupply || !/^\d+$/.test(totalSupply) || !/^\d+$/.test(maxSupply)) {
+    return { status: "unknown" as const, remaining: null, max: null };
+  }
+  try {
+    const total = BigInt(totalSupply);
+    const max = BigInt(maxSupply);
+    if (max <= 0n) return { status: "unknown" as const, remaining: null, max: null };
+    if (total >= max) return { status: "sold_out" as const, remaining: "0", max: max.toString() };
+    return {
+      status: "available" as const,
+      remaining: (max - total).toString(),
+      max: max.toString(),
+    };
+  } catch {
+    return { status: "unknown" as const, remaining: null, max: null };
+  }
+}
+
 export function detectWalletKind(address: string): WalletKind | null {
   const a = address.trim();
   if (/^0x[0-9a-fA-F]{40}$/.test(a)) return "evm";
@@ -136,7 +155,10 @@ export function withOpenSeaEligibility(
     eligibility_verified: true,
     verified_stages: [...result.whitelistStages, ...result.publicStages, ...result.unknownStages],
     checked_at: new Date().toISOString(),
-    detail,
+    detail:
+      item.supply_verified === false
+        ? `${detail} Mint Finder couldn't confirm remaining supply; check OpenSea before relying on availability.`
+        : detail,
   };
 }
 
@@ -152,6 +174,7 @@ export type ResultItem = {
   status: Status;
   eligibility_type: EligibilityType;
   eligibility_verified?: boolean;
+  supply_verified?: boolean;
   verified_stages?: string[];
   detail: string;
   mint_url: string | null;
