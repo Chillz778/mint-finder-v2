@@ -376,7 +376,8 @@ function Index() {
             setAdminDialog("question");
           }}
         >
-          Public user active
+          <span className="public-user-full">Public user active</span>
+          <span className="public-user-compact">Admin</span>
         </button>
         <a className="brand" href="#top" aria-label="Mint Finder home">
           <img className="brand-logo" src="/mintfinder-logo.svg" alt="" />
@@ -394,6 +395,19 @@ function Index() {
 
         <div className="header-note">
           <span className="live-dot" />4 supported networks
+        </div>
+        <div className="header-wallet-control">
+          <button
+            className="header-wallet-button"
+            disabled={eligibilityBusy !== ""}
+            onClick={() =>
+              connectedWallet ? void disconnectWallet() : setWalletDisclaimerOpen(true)
+            }
+            type="button"
+          >
+            {connectedWallet ? "Disconnect wallet" : "Connect wallet"}
+          </button>
+          <span className="header-wallet-caption">Wallet connection is optional</span>
         </div>
       </header>
 
@@ -615,31 +629,10 @@ function Index() {
                 {!isChecking && <ArrowRight size={16} />}
               </button>
             </form>
-            <div className="wallet-connect-row">
-              {connectedWallet ? (
-                <>
-                  <span className="wallet-connected-address" role="status">
-                    Connected {connectedWallet.slice(0, 6)}…{connectedWallet.slice(-4)}
-                  </span>
-                  <button
-                    className="wallet-connect-button wallet-disconnect-button"
-                    disabled={eligibilityBusy !== ""}
-                    onClick={() => void disconnectWallet()}
-                    type="button"
-                  >
-                    Disconnect wallet
-                  </button>
-                </>
-              ) : (
-                <button
-                  className="wallet-connect-button"
-                  onClick={() => setWalletDisclaimerOpen(true)}
-                  type="button"
-                >
-                  Connect wallet
-                </button>
-              )}
-            </div>
+            <p className="wallet-check-helper">
+              Paste and check your wallet address to see eligible mints. To verify OpenSea whitelist
+              or gated phases, use <strong>Connect wallet</strong> at the top right.
+            </p>
             <div className="supported-chains">
               <span>NETWORKS</span>
               {CHAIN_OPTIONS.map((chain) => (
@@ -755,9 +748,7 @@ function Index() {
                       {eligibilityBusy === "batch" ? "Checking phases…" : "Check gated phases"}
                     </button>
                   ) : (
-                    <button onClick={() => setWalletDisclaimerOpen(true)} type="button">
-                      Connect wallet
-                    </button>
+                    <span>Use Connect wallet at the top right to verify these phases.</span>
                   )}
                 </div>
               )}
