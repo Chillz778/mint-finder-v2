@@ -70,6 +70,21 @@ export const createAdminProject = createServerFn({ method: "POST" })
     return project;
   });
 
+export const deleteAdminProject = createServerFn({ method: "POST" })
+  .middleware([requireAdminSession])
+  .validator((input: unknown) => z.object({ projectId: z.string().uuid() }).parse(input))
+  .handler(async ({ data }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: project, error } = await supabaseAdmin
+      .from("projects")
+      .delete()
+      .eq("id", data.projectId)
+      .select("id, name")
+      .single();
+    if (error) throw new Error(`Could not remove project: ${error.message}`);
+    return project;
+  });
+
 export const uploadAdminAllowlist = createServerFn({ method: "POST" })
   .middleware([requireAdminSession])
   .validator((input: unknown) =>

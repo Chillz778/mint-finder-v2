@@ -6,6 +6,7 @@ import {
   adminLogout,
   adminSession,
   createAdminProject,
+  deleteAdminProject,
   getAdminProjects,
   uploadAdminAllowlist,
 } from "@/lib/admin.functions";
@@ -61,6 +62,7 @@ function Admin() {
   const [pageError, setPageError] = useState("");
   const [busy, setBusy] = useState(false);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [pendingRemoveProject, setPendingRemoveProject] = useState("");
   const [xLink, setXLink] = useState("");
   const [draft, setDraft] = useState<ProjectDraft>(emptyDraft);
   const [allowlistProject, setAllowlistProject] = useState("");
@@ -189,6 +191,26 @@ function Admin() {
       setDraft(emptyDraft);
       setXLink("");
       setNotice(`${data.name} was added.`);
+    } catch (error) {
+      setPageError(messageFrom(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeProject(project: ProjectOption) {
+    setBusy(true);
+    setPageError("");
+    setNotice("");
+    try {
+      await deleteAdminProject({ data: { projectId: project.id } });
+      const remaining = projects.filter((item) => item.id !== project.id);
+      setProjects(remaining);
+      setAllowlistProject((current) =>
+        current === project.id ? (remaining[0]?.id ?? "") : current,
+      );
+      setPendingRemoveProject("");
+      setNotice(`${project.name} and its uploaded allowlist entries were removed.`);
     } catch (error) {
       setPageError(messageFrom(error));
     } finally {
@@ -422,6 +444,63 @@ function Admin() {
                   Save project
                 </button>
               </form>
+            </section>
+
+            <section className="admin-panel">
+              <h2>Manage projects</h2>
+              <p>
+                Remove projects you added. Removing a project also deletes its uploaded allowlist.
+              </p>
+              {projects.length === 0 ? (
+                <p className="admin-project-empty">No projects have been added yet.</p>
+              ) : (
+                <div className="admin-project-list">
+                  {projects.map((project) => (
+                    <article className="admin-project-row" key={project.id}>
+                      <div className="admin-project-summary">
+                        <div>
+                          <strong>{project.name}</strong>
+                          <span>{chainLabel(project.chain)}</span>
+                        </div>
+                        <button
+                          className="admin-danger-button"
+                          disabled={busy}
+                          onClick={() => setPendingRemoveProject(project.id)}
+                          type="button"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      {pendingRemoveProject === project.id && (
+                        <div className="admin-delete-confirm" role="alert">
+                          <strong>Remove {project.name}?</strong>
+                          <p>
+                            This will remove it from Mint Finder and permanently delete its uploaded
+                            allowlist entries.
+                          </p>
+                          <div>
+                            <button
+                              disabled={busy}
+                              onClick={() => setPendingRemoveProject("")}
+                              type="button"
+                            >
+                              Keep project
+                            </button>
+                            <button
+                              className="admin-danger-confirm"
+                              disabled={busy}
+                              onClick={() => void removeProject(project)}
+                              type="button"
+                            >
+                              {busy ? "Removing…" : "Remove project and allowlist"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              )}
             </section>
 
             <section className="admin-panel">
